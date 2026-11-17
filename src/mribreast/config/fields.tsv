@@ -1,0 +1,101 @@
+key	section	type	default	choices	identity	legacy	help
+clinical_features_file	path	path			1	legacy	Duke Clinical_and_Other_Features.xlsx
+metadata_file	path	path			1	legacy	NBIA digest xlsx/csv with series metadata (row order matters for duke_legacy_3d)
+imaging_features_file	path	path			1	legacy	Duke Imaging_Features.xlsx or CSV export
+annotation_boxes_file	path	path			1	legacy	Duke Annotation_Boxes.xlsx
+density_file	path	path			1	new	Breast_Radiologist_Density_Assessments.xlsx (feature group density)
+allowed_predictors_file	path	path			1	new	Versioned allowed-predictor policy JSON; empty uses the packaged default
+image_root	path	path			1	legacy	Directory of <SeriesInstanceUID>.nii.gz files
+image_manifest_file	path	path			1	new	CSV manifest of ready 2D images (PNG/TIFF) for image_source=manifest_2d
+mask_manifest_file	path	path			1	new	CSV manifest of external masks for mask_provider=local_files
+prepared_root	path	path			0	legacy	Deterministic prepared-volume cache root
+subtraction_root	path	path			0	legacy	Deterministic subtraction cache root
+logs_root	path	path			0	legacy	Training logs root
+checkpoint_root	path	path			0	legacy	Training artifacts: <checkpoint_root>/<train_id>/
+validation_root	path	path			0	legacy	Evaluations: <validation_root>/<train_id>/<eval_id>/
+summary_root	path	path			0	legacy	Summary and ranking output
+slurm_logs	path	path			0	legacy	Slurm stdout/stderr and frozen run snapshots (controller only)
+profile	train	choice	duke_legacy_3d	duke_legacy_3d|general	1	new	Protocol profile: legacy-compatible or general (stricter) protocol
+label_scheme	train	choice	oncotype_binary_18	oncotype_binary_18|oncotype_3class_18_31	1	new	<=18 -> 0 and >18 -> 1, or <=18 / (18,31] / >31
+positive_class	train	int	1		1	new	Positive class index for binary metrics and thresholds
+branches	train	csv	image,tabular	image|tabular	1	new	Branches to fit: image, tabular, or both (late fusion)
+phase_count	train	int	5		1	legacy-constant	Series (phases) per study; legacy MAX_SERIES_PER_STUDY=5
+phase_order	train	choice	metadata	metadata|explicit	1	new	metadata = row order of metadata file (legacy); explicit = sort by parsed phase index
+seed	train	int	42		1	legacy	Global seed; inner split uses seed+fold
+image_dim	train	choice	3d	3d|2d	1	new	3D volumes or 2D slices/images
+image_source	train	choice	nifti	nifti|manifest_2d	1	new	NIfTI series (3D, or 2D slices from 3D) or ready 2D images
+mri_model	train	choice	densenet121	fcn|densenet121|resnet10|resnet18	1	legacy	Image network; spatial dims follow image_dim
+subtraction_mode	train	choice	none	none|post_minus_pre|consecutive	1	legacy	Channel construction from phases
+target_size	train	ints	256 256 64		1	legacy	3D resize target in loaded-array axis order (3 ints)
+target_size_2d	train	ints	224 224		1	new	2D resize target H W
+slice_axis	train	int	2		1	new	Loaded-array axis sliced for 2D
+slice_selection	train	choice	center	center|uniform|mask_max_area|mask_all	1	new	Deterministic slice selection from 3D volumes
+slices_per_study	train	int	1		1	new	Slices per study for center/uniform selection
+aggregation	train	choice	mean_prob	mean_prob|max_prob	1	new	Study-level aggregation of multi-image predictions
+loss_unit	train	choice	image	image	1	new	Unit of the training loss for 2D (image)
+resize_backend	train	choice	torch_trilinear	torch_trilinear	1	new	Resampling backend (legacy-compatible backend)
+use_annotation_boxes	train	bool	false		1	legacy	Training-only lesion-preserving background erasing from Duke boxes
+annotation_erase_attempts	train	int	8		1	new	Max sampling attempts for background box erasing
+mask_provider	train	choice	none	none|local_files|synthetic	1	new	External mask source
+mask_kind	train	choice	manual	manual|predicted	1	new	Manual masks or segmenter predictions (separate sources)
+mask_mode	train	choice	none	none|roi_crop|mask_channel|foreground_only	1	new	How masks enter the classifier
+mask_roi_classes	train	csv	1		1	new	Mask class codes treated as ROI (comma list)
+roi_margin	train	float	0.1		1	new	roi_crop margin as fraction of bbox extent per axis
+mask_missing_policy	train	choice	error	error|full_image|drop	1	new	Missing mask: fail, use full image, or drop sample (audited)
+mask_empty_policy	train	choice	full_image	error|full_image|drop	1	new	Empty ROI mask policy
+mask_provenance	train	choice	unknown	unknown|frozen_external|fold_trained	1	new	Segmenter provenance; fold_trained requires per-fold mask sets
+feature_groups	train	csv	clinical	clinical|kinetic|morphology|heterogeneity|density	1	legacy	Tabular feature groups (comma list)
+feature_model	train	choice	xgboost	xgboost|mlp	1	legacy	Tabular model
+feature_selector	train	choice	none	none|lasso	1	legacy	Fold-local feature selector
+imaging_patient_id_column	train	str	Patient ID		1	legacy	Patient id column in the imaging-features source
+allow_missing_imaging_features	train	bool	false		1	legacy	Allow studies without imaging-feature rows
+include_sensitive	train	bool	false		1	legacy	Include race_ethnicity (explicit opt-in)
+prediction_time	train	choice	mri	mri	1	new	Prediction moment for the allowed-predictor policy
+selector_preprocessing	train	choice	outer	outer|fold_local	1	new	outer = legacy (preprocess before selector CV); fold_local = refit inside each selector subfold
+mlp_early_stopping	train	choice	internal	internal|grouped|off	1	new	internal = legacy sklearn random 15%; grouped = patient-grouped holdout; off
+lasso_cv_folds	train	int	5		1	legacy	LASSO inner CV folds
+lasso_cs	train	int	20		1	legacy	Number of C values
+lasso_max_iter	train	int	5000		1	legacy	LASSO max iterations
+lasso_tolerance	train	float	1e-4		1	legacy	LASSO tolerance
+lasso_min_features	train	int	1		1	legacy	Minimum selected features
+lasso_n_jobs	train	int	8		0	legacy	Parallelism only
+lasso_plot_top_n	train	int	30		0	legacy	Plot only
+xgb_n_estimators	train	int	300		1	legacy	XGBoost trees
+xgb_max_depth	train	int	3		1	legacy	XGBoost depth
+xgb_learning_rate	train	float	0.03		1	legacy	XGBoost eta
+xgb_subsample	train	float	0.8		1	legacy	XGBoost subsample
+xgb_colsample_bytree	train	float	0.8		1	legacy	XGBoost colsample
+xgb_n_jobs	train	int	8		0	legacy	Parallelism only
+mlp_hidden_layers	train	str	128,64		1	legacy	Comma-separated hidden widths
+mlp_alpha	train	float	1e-4		1	legacy	MLP L2
+mlp_learning_rate	train	float	1e-3		1	legacy	MLP learning_rate_init
+mlp_max_iter	train	int	500		1	legacy	MLP max_iter
+xgb_extra_json	train	json	{}		1	legacy	Extra XGBClassifier kwargs (JSON object)
+mlp_extra_json	train	json	{}		1	legacy	Extra MLPClassifier kwargs (JSON object)
+mri_extra_json	train	json	{}		1	legacy	Extra MONAI network kwargs (JSON object)
+trainer_extra_json	train	json	{}		1	legacy	Extra Lightning Trainer kwargs; callbacks/logger/default_root_dir/enable_checkpointing are protected
+num_folds	train	int	5		1	legacy	Outer StratifiedGroupKFold folds
+threshold_calibration_folds	train	int	5		1	legacy	Inner folds; first inner fold is the calibration split
+selection_split	train	choice	shared	shared|separate|outer	1	new	shared = calibration selects checkpoint and threshold (legacy fusion); separate = disjoint selection/threshold patients; outer = historical image-only
+epoch	train	int	30		1	legacy	Max epochs
+batch_size	train	int	4		1	legacy	Batch size
+num_workers	train	int	4		0	legacy	DataLoader workers (not identity)
+positive_boost	train	float	1.0		1	legacy	Extra multiplier for the positive-class weight (binary)
+sensitivity_lambda	train	float	0.05		1	legacy	Weight of the soft-sensitivity loss term
+loss	train	choice	ce_soft_sensitivity	ce_soft_sensitivity|ce	1	new	Weighted CE + soft sensitivity (legacy) or weighted CE only
+optimizer	train	choice	adam	adam|adamw	1	new	Optimizer
+lr	train	float	1e-4		1	legacy	Learning rate
+weight_decay	train	float	0.0		1	new	Weight decay
+scheduler	train	choice	none	none|cosine	1	new	LR scheduler
+early_stopping	train	bool	false		1	new	Legacy declares EarlyStopping but leaves it commented out, so default off
+early_stopping_patience	train	int	8		1	new	Legacy patience
+early_stopping_min_delta	train	float	1e-4		1	new	Legacy min_delta
+experiment_id	train	str			0	legacy	Optional human label for run directories; never part of identity
+fusion_alpha	validate	float	0.5		1	legacy	p_fusion = alpha*p_image + (1-alpha)*p_tabular
+primary_branch	validate	choice	auto	auto|fusion|image|tabular	1	new	Branch used for ranking; auto = fusion when both branches exist, otherwise the single branch
+report_unit	validate	choice	study	study|patient	1	new	Unit of metrics and aggregation
+threshold_strategy	validate	choice	balanced_accuracy	balanced_accuracy|fixed_0.5	1	new	Binary threshold strategy on the threshold split
+validate_num_workers	validate	int	4		0	renamed:num_workers	Validation DataLoader workers
+expected_folds	summarize	int	5		0	legacy	Expected folds for completeness
+top_n	summarize	int	20		0	legacy	Rows shown in the report
+include_incomplete	summarize	bool	false		0	legacy	Rank incomplete runs too

@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venvs/
+# Raw/derived imaging, identifying metadata and run outputs never go to Git.
+*.nii
+*.nii.gz
+*.dcm
+*.ckpt
+data/
+runs/
+lightning_logs/
+logs/
+validation_charts/
+checkpoints/
+prepared/
+*.xlsx
+!tests/fixtures/**/*.xlsx
