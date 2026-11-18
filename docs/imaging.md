@@ -123,7 +123,28 @@ volume. Providers (`contracts.MaskProvider`):
 
 Modes: `none`, `roi_crop` (bbox of `mask_roi_classes` ± `roi_margin` × extent per
 side, joint crop then joint resize), `mask_channel` (binary ROI appended), and
-`foreground_only` (image zeroed outside ROI after the joint resize). Joint
+`foreground_only` (image zeroed outside ROI after the joint resize).
+
+ROI geometry is always computed on the **native mask grid** (2D and 3D):
+
+* `roi_crop`: bbox on the native grid; image and mask are cropped at native
+  resolution and then resized to the target (3D uses an uncached-size native
+  volume, i.e. phases z-scored / differences built on the original grid, then
+  crop+resize; cannot be combined with `use_annotation_boxes`).
+* `mask_channel` / `foreground_only`: the binary ROI is resampled to the target
+  grid with the image's own interpolation (bilinear/trilinear, `align_corners=False`)
+  and thresholded at `> 0` (rule `linear>0`, so ROI and interpolated image content
+  coincide). If that is empty although the native ROI is not (a lesion smaller than
+  the sampling stride), the `any_overlap` rule is used (output voxel is ROI iff its
+  floor/ceil footprint overlaps any ROI voxel), so an accepted mask never yields an
+  empty ROI. The rule used is written to the transform log (`roi_resample`).
+  Emptiness is decided once on the native grid by `mask_empty_policy` (audited).
+
+Reference grid: the grid of a study is the header geometry of its **first series**
+(the key's `series_id`). Masks are validated against it with `Geometry.matches`
+(shape equality, affine `atol=1e-4`) both when items are built and when an item is
+loaded; for subtraction, `StudyVolume.affine` is also reported on that grid (phases
+must agree within the legacy `same_grid` tolerance, `rtol=1e-4, atol=1e-3`). Joint
 transforms (`joint_crop/flip/resize`) share parameters; image continuous, mask
 nearest; every op is logged. `write_mask_preview` writes a PNG (image | overlay)
 and a JSON of the applied transforms.
@@ -135,7 +156,10 @@ undeclared class codes, wrong source kind) → error (no config field yet). Mask
 geometry must equal the image grid (shape, and the affine for NIfTI). Audit:
 `mask_audit` (one row per decision: key, purpose, status, action, provenance,
 fingerprint) and `mask_audit_summary` (studies/images in/out = cohort change and
-metric denominators). Mask-based slice selection needs masks at inference too; a
+metric denominators). The cohort audit (`ImageBranch.audit`) never raises: a
+policy `error` is reported as action `error`; with fold-trained masks it is
+computed once per fold present in the mask manifest (`fold` column; fold-agnostic
+masks give `fold=""`). Mask-based slice selection needs masks at inference too; a
 missing mask follows the missing policy (`full_image` → centre selection).
 
 ### Provenance protocol
@@ -166,6 +190,10 @@ save_last=True)`; early stopping off by default (legacy declared it but left it
 commented out, `n_fold_cv_run.py` L560-578); scheduler `none|cosine`; CSV logger.
 `trainer_extra_json` cannot override `callbacks, logger, default_root_dir,
 enable_checkpointing`. The training loader is not shuffled (legacy).
+
+Probabilities are computed as a float64 softmax of the logits (float32 saturates to
+exactly 1.0 for confident studies and creates artificial ROC-AUC ties), both for
+validation metrics and `predict_proba`, before study aggregation.
 
 `ImageBranch.fit` writes `best.ckpt, last.ckpt, image_branch.json, history.csv`
 (+ `annotation_coverage.csv`, `mask_audit_fit.csv`). `load` rejects artifacts

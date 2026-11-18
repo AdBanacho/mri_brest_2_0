@@ -78,6 +78,13 @@ def fuse_probabilities(image_probabilities, tabular_probabilities, alpha: float 
         raise ValueError("Probability arrays must have shape (samples, classes).")
     if not (np.all(np.isfinite(image_probabilities)) and np.all(np.isfinite(tabular_probabilities))):
         raise ValueError("Probability arrays must contain only finite values.")
+    # alpha in {0, 1}: return the single branch unchanged. Renormalising a (float32-derived) branch would
+    # perturb saturated scores by ~1e-8 and break/introduce ties, so ROC-AUC at the extremes would not
+    # equal the single-branch AUC exactly.
+    if alpha == 1.0:
+        return image_probabilities.copy()
+    if alpha == 0.0:
+        return tabular_probabilities.copy()
     fused = alpha * image_probabilities + (1.0 - alpha) * tabular_probabilities
     row_sums = fused.sum(axis=1, keepdims=True)
     if np.any(row_sums <= 0):

@@ -63,4 +63,6 @@ def test_fusion_matches_legacy():
     rng = np.random.default_rng(1)
     img, tab = rng.dirichlet([1, 1, 1], 20), rng.dirichlet([1, 1, 1], 20)
     for alpha in (0.0, 0.25, 0.5, 1.0):
-        np.testing.assert_array_equal(fuse_probabilities(img, tab, alpha), legacy_fuse(img, tab, alpha))
+        # alpha in {0,1} returns the branch unchanged (legacy renormalises): equal up to 1e-15.
+        np.testing.assert_allclose(fuse_probabilities(img, tab, alpha), legacy_fuse(img, tab, alpha),
+                                   rtol=0, atol=1e-15)

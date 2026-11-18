@@ -10,7 +10,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from mribreast.imaging.cache import CACHE_SCHEMA_VERSION, VolumeCache, cache_key_payload
-from mribreast.imaging.geometry import read_header_geometry, series_path
+from mribreast.imaging.geometry import read_header_geometry, resized_affine, series_path
 from mribreast.imaging.volume import (NORMALISATION_DIFFERENCE, NORMALISATION_PHASE, RESIZE_BACKEND, pad_channels,
                                       prepare_difference, prepare_phase, subtraction_pairs)
 
@@ -18,7 +18,7 @@ from mribreast.imaging.volume import (NORMALISATION_DIFFERENCE, NORMALISATION_PH
 @dataclass(frozen=True)
 class StudyVolume:
     data: np.ndarray                    # float32 [C, *S]
-    affine: np.ndarray                  # grid of channel 0 (first phase / first pair minuend)
+    affine: np.ndarray                  # grid of the study's first series (reference/mask grid)
     reference_uid: str                  # series whose grid ``affine`` describes
     channel_sources: tuple[str, ...]    # e.g. ("uid0", "uid1") or ("uid1-uid0", ...)
     cache_keys: tuple[str, ...] = field(default=())
@@ -99,5 +99,10 @@ class StudyVolumeLoader:
                 keys.append(result.key)
                 affine = result.affine if affine is None else affine
         data = np.stack(arrays, axis=0).astype(np.float32, copy=False)
+        if self.subtraction_mode != "none":
+            # Reference grid of a study = its FIRST series (the mask grid). Subtraction phases equal it within the
+            # legacy same_grid tolerance; report the first series' grid, not the minuend's, for consistency.
+            reference = read_header_geometry(series_path(self.image_root, uids[0]))
+            affine = resized_affine(np.asarray(reference.affine), reference.shape, data.shape[1:])
         data = pad_channels(data, self.channels)
         return StudyVolume(data, np.asarray(affine), uids[0], sources, tuple(keys))

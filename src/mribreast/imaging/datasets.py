@@ -30,10 +30,9 @@ from mribreast.imaging.loader import StudyVolumeLoader
 from mribreast.imaging.manifest import (CHANNEL_COLUMN, load_manifest_image, read_image_file, read_image_manifest,
                                         zscore_channels)
 from mribreast.imaging.masks.policies import (MaskDecision, MaskPolicyError, apply_mask_mode, check_mask,
-                                              resolve_mask)
+                                              resample_roi, resolve_mask, roi_array)
 from mribreast.imaging.settings import ImagingSettings
 from mribreast.imaging.slices import extract_slice, roi_area_per_slice, select_slices
-from mribreast.imaging.volume import resize
 
 ITEM_COLUMNS = ("study_index", PATIENT_ID, STUDY_ID, LABEL, SERIES_ID, SLICE_ID, "mask_action")
 
@@ -68,10 +67,13 @@ def _label(row: Any) -> int:
 class ItemBuilder:
     """Builds ``ItemTable`` objects for a study frame (resolving mask policies)."""
 
-    def __init__(self, settings: ImagingSettings, provider: MaskProvider | None, manifest: pd.DataFrame | None):
+    def __init__(self, settings: ImagingSettings, provider: MaskProvider | None, manifest: pd.DataFrame | None,
+                 *, raise_errors: bool = True):
         self.s = settings
         self.provider = provider
         self.manifest = manifest
+        # raise_errors=False (cohort audits): policy "error" is reported as action "error" and the item excluded
+        self.raise_errors = bool(raise_errors)
         if settings.uses_masks and provider is None:
             raise ValueError("mask_mode / mask-based slice selection require a mask provider")
 
@@ -79,7 +81,8 @@ class ItemBuilder:
         assert self.provider is not None
         return resolve_mask(self.provider, key, fold=fold, expected=expected, roi_classes=self.s.mask_roi_classes,
                             missing_policy=self.s.mask_missing_policy, empty_policy=self.s.mask_empty_policy,
-                            invalid_policy=self.s.mask_invalid_policy, mask_kind=self.s.mask_kind, purpose=purpose)
+                            invalid_policy=self.s.mask_invalid_policy, mask_kind=self.s.mask_kind, purpose=purpose,
+                            raise_errors=self.raise_errors)
 
     def build(self, frame: pd.DataFrame, fold: int | None) -> ItemTable:
         table = ItemTable(pd.DataFrame(columns=list(ITEM_COLUMNS)), n_studies=len(frame))
@@ -106,7 +109,7 @@ class ItemBuilder:
             expected = read_header_geometry(series_path(self.s.image_root, uids[0]))
             decision = self._resolve(key, fold, expected, "mask_mode")
             table.decisions.append(decision)
-            if decision.action == "drop":
+            if decision.action in ("drop", "error"):
                 table.notes.append({"study_index": index, STUDY_ID: key.study_id, "note": "dropped_by_mask_policy"})
                 return []
             action = decision.action
@@ -127,7 +130,7 @@ class ItemBuilder:
         if s.slice_selection in ("mask_max_area", "mask_all"):
             volume_decision = self._resolve(volume_key, fold, geometry, "slice_selection")
             table.decisions.append(volume_decision)
-            if volume_decision.action == "drop":
+            if volume_decision.action in ("drop", "error"):
                 table.notes.append({"study_index": index, STUDY_ID: study, "note": "dropped_by_mask_policy"})
                 return []
             if volume_decision.action == "use":
@@ -153,14 +156,14 @@ class ItemBuilder:
                     else:
                         decision = MaskDecision(key, "empty", "", volume_decision.record, "empty ROI on slice",
                                                 "mask_mode")
-                        if s.mask_empty_policy == "error":
+                        if s.mask_empty_policy == "error" and self.raise_errors:
                             raise MaskPolicyError(f"mask empty for {key.as_tuple()}")
                         decision.action = s.mask_empty_policy
                 else:
                     decision = MaskDecision(key, volume_decision.status, volume_decision.action,
                                             volume_decision.record, volume_decision.detail, "mask_mode")
                 table.decisions.append(decision)
-                if decision.action == "drop":
+                if decision.action in ("drop", "error"):
                     continue
                 action = decision.action
             items.append({"study_index": index, PATIENT_ID: patient, STUDY_ID: study, LABEL: _label(row),
@@ -188,7 +191,7 @@ class ItemBuilder:
             if self.s.mask_mode != "none":
                 decision = self._resolve(key, fold, Geometry(shape=image_shape_2d(path)), "mask_mode")
                 table.decisions.append(decision)
-                if decision.action == "drop":
+                if decision.action in ("drop", "error"):
                     continue
                 action = decision.action
             items.append({"study_index": index, PATIENT_ID: patient, STUDY_ID: study, LABEL: _label(row),
@@ -240,6 +243,15 @@ class ImageDataset(Dataset):
         else:
             self.loader = None
         self._last: tuple[str, Any] | None = None   # one-study cache (items of a study are consecutive)
+        self._native_loader: StudyVolumeLoader | None = None
+        if settings.image_source == "nifti" and settings.image_dim == "3d" and settings.mask_mode == "roi_crop":
+            if settings.use_annotation_boxes:
+                raise ValueError("use_annotation_boxes cannot be combined with 3D mask_mode=roi_crop "
+                                 "(the erased cuboid is defined on the full target grid)")
+            self._native_loader = StudyVolumeLoader(
+                settings.image_root, subtraction_mode=settings.subtraction_mode, channels=int(base),
+                target_size=None, prepared_root=settings.prepared_root or None,
+                subtraction_root=settings.subtraction_root or None)
 
     def __len__(self) -> int:
         return len(self.items)
@@ -250,6 +262,10 @@ class ImageDataset(Dataset):
             assert self.loader is not None
             self._last = (token, self.loader.load(uids))
         return self._last[1]
+
+    def _native_volume(self, uids: Sequence[str]) -> Any:
+        assert self._native_loader is not None
+        return self._native_loader.load(uids)
 
     def _mask(self, key: ImageKey, action: str) -> Any:
         if action != "use" or self.provider is None:
@@ -294,12 +310,24 @@ class ImageDataset(Dataset):
                                 "origin": list(origin) if origin else None})
             key = ImageKey(item[PATIENT_ID], study, item[SERIES_ID], "")
             record = self._mask(key, action)
-            mask = None
-            if record is not None:
-                mask = resize(record.array, s.target_size, mode="nearest")
-            out = data if s.mask_mode == "none" else apply_mask_mode(
-                data, mask, s.mask_mode, roi_classes=s.mask_roi_classes, margin=s.roi_margin,
-                out_size=s.target_size, log=log)
+            if s.mask_mode == "none":
+                out = data
+            elif record is None:      # full_image fallback
+                out = apply_mask_mode(data, None, s.mask_mode, roi_classes=s.mask_roi_classes, margin=s.roi_margin,
+                                      out_size=s.target_size, log=log)
+            elif s.mask_mode == "roi_crop":
+                # ROI bbox on the native mask grid; crop image + mask at native resolution, then resize
+                native = self._native_volume(uids)
+                out = apply_mask_mode(native.data, record.array, "roi_crop", roi_classes=s.mask_roi_classes,
+                                      margin=s.roi_margin, out_size=s.target_size, log=log)
+            else:
+                # ROI on the native grid -> target grid by any-overlap resampling (never loses a lesion voxel)
+                roi, rule = resample_roi(roi_array(record.array, s.mask_roi_classes), s.target_size)
+                if log is not None:
+                    log.append({"op": "roi_resample", "rule": rule, "from": list(record.array.shape),
+                                "to": list(s.target_size)})
+                out = apply_mask_mode(data, roi.astype(np.int64), s.mask_mode, roi_classes=(1,),
+                                      margin=s.roi_margin, out_size=s.target_size, log=log)
         else:
             uids = parse_series_uids(item[SERIES_UIDS])
             volume = self._study_volume(uids)
@@ -308,7 +336,8 @@ class ImageDataset(Dataset):
             mask = None
             if action == "use":
                 record = self._mask(ImageKey(item[PATIENT_ID], item[STUDY_ID], item[SERIES_ID], ""), action)
-                expected = geometry_from_affine(volume.data.shape[1:], volume.affine)
+                # same reference grid + tolerance as ItemBuilder: header geometry of the first series
+                expected = read_header_geometry(series_path(s.image_root, uids[0]))
                 status, detail = check_mask(record, record.key, expected, None)
                 if status != "ok":
                     raise MaskPolicyError(f"{status}: {detail}")

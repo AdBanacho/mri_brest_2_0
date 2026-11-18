@@ -147,3 +147,33 @@ def test_protected_trainer_keys_and_missing_provider(synthetic, tmp_path):
     masked = dict(_cfg(root), mask_mode="mask_channel")
     with pytest.raises(ValueError, match="mask provider"):
         build_image_branch(masked, num_classes=2)
+
+
+class _ConfidentNet:
+    """Logit gap ~20 (+ per-study variation): float32 softmax saturates to exactly 1.0, float64 does not."""
+
+    def __call__(self, x):
+        import torch
+
+        m = x.flatten(1).amax(1) / 10
+        return torch.stack([torch.zeros_like(m), 20.0 + m], dim=1)
+
+    def eval(self):
+        return self
+
+
+def test_probabilities_are_float64_and_do_not_saturate(synthetic):
+    import torch
+
+    from mribreast.imaging.settings import ImagingSettings
+    from mribreast.models.image_branch import ImagePredictor
+
+    root, studies, _, _ = synthetic
+    settings = ImagingSettings(image_root=str(root / "nifti"), phase_count=3, target_size=(8, 8, 4))
+    predictor = ImagePredictor(_ConfidentNet(), settings, num_classes=2, channels=3, provider=None, fold=1,
+                               meta={}, directory=root)
+    probs = predictor.predict_proba(studies)
+    assert probs.dtype == np.float64
+    assert len(np.unique(probs[:, 1])) > 1 and not np.all(probs[:, 1] == 1.0)
+    float32 = torch.softmax(torch.tensor([[0.0, 20.0], [0.0, 20.3]]), dim=1)[:, 1]
+    assert float(float32[0]) == float(float32[1]) == 1.0          # the tie float64 avoids

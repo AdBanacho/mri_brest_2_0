@@ -171,11 +171,13 @@ context only: its numbers must not be reported as results of the new pipeline.
 | 5 | LASSO CV on features preprocessed once (`selector_preprocessing=outer`) | `fold_local` refits preprocessing in each selector subfold | tests/unit/test_tabular_branch.py::test_fold_local_preprocessing_differs_from_outer |
 | 6 | MLP early stopping on random 15% rows (`mlp_early_stopping=internal`) | `grouped` (patient-grouped holdout) or `off` | tests/unit/test_tabular_branch.py::test_mlp_grouped_early_stopping_respects_groups |
 | 7 | split re-derived at validation and compared with the CSV | frozen `split_manifest.csv` + hash; resume; `ArtifactMismatch` | tests/unit/test_protocol_train_validate.py |
-| 8 | training loader not shuffled; EarlyStopping commented out | seeded shuffle; `early_stopping=false` by default | docs/legacy-parity.md T36/T40 |
+| 8 | training loader not shuffled; EarlyStopping commented out | **same in both profiles**: training order is the fit-row order (not shuffled) and `early_stopping=false` by default (opt-in). Only change: a trailing training batch of exactly one sample is dropped, because BatchNorm cannot train on it (legacy crashed there) | docs/legacy-parity.md T36/T40, tests/e2e/test_modes_smoke.py |
 | 9 | caches keyed by image-root path + size | content and parameter keyed, with schema version | tests/unit/test_imaging_cache.py |
 | 10 | `fcn` crashes | working C-channel FCN | tests/unit/test_models_networks.py |
 | 11 | study-level metrics only; 3-class without specificity | `report_unit=patient`; macro specificity | tests/unit/test_protocol_train_validate.py |
 | 12 | claims about generalisation of the selected configuration | the report states how the configuration was chosen and that outer folds were reused for ranking. A generalisation claim needs an independent set or nested CV | docs/protocol.md |
+| 13 | every study must yield a prediction | studies a branch cannot score (mask policy `drop`) are excluded from **all** branches and fusion; listed in `excluded_studies.csv`; denominators in `validation_metrics.csv` | tests/unit/test_protocol_train_validate.py::test_studies_without_prediction_are_excluded_from_all_branches_and_audited |
+| 14 | fusion renormalises at every alpha | alpha 0/1 return the single branch unchanged (differs by ≤1e-16 from legacy) so the extremes reproduce single-branch ROC-AUC exactly | tests/unit/test_protocol_fusion.py |
 
 ## 8. Assumptions that still need data or a cluster
 

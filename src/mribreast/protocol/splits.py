@@ -266,11 +266,14 @@ def validate_split_plan(plan: pd.DataFrame, frame: pd.DataFrame | None = None, *
             extra = sorted(all_studies - set(cohort.index))[:5]
             absent = sorted(set(cohort.index) - all_studies)[:5]
             raise SplitError(f"split plan does not match cohort studies (not in cohort: {extra}; not in plan: {absent})")
-        first = plan[plan[FOLD] == folds[0]]
-        joined = cohort.loc[first[STUDY_ID].astype(str)]
-        if not np.array_equal(joined["p"].to_numpy(), first[PATIENT_ID].astype(str).to_numpy()):
-            raise SplitError("split plan patient ids differ from cohort")
-        if check_labels and not np.array_equal(joined["y"].to_numpy(), first[LABEL].astype(int).to_numpy()):
+        # Every fold row is checked (not only fold 1): a hand-edited/stale plan could otherwise relabel a
+        # patient in a later fold and put the same person into fit and outer_eval.
+        joined = cohort.loc[plan[STUDY_ID].astype(str)]
+        wrong_patient = joined["p"].to_numpy() != plan[PATIENT_ID].astype(str).to_numpy()
+        if wrong_patient.any():
+            bad = plan.loc[wrong_patient, [FOLD, STUDY_ID]].head(5).to_dict("records")
+            raise SplitError(f"split plan patient ids differ from cohort: {bad}")
+        if check_labels and not np.array_equal(joined["y"].to_numpy(), plan[LABEL].astype(int).to_numpy()):
             raise SplitError("split plan labels differ from cohort labels")
 
 

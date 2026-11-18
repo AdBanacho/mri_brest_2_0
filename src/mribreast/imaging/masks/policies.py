@@ -26,6 +26,7 @@ import pandas as pd
 
 from mribreast.contracts import Geometry, ImageKey, MaskProvider, MaskRecord
 from mribreast.imaging.transforms import TransformLog, joint_crop, joint_resize, roi_bbox
+from mribreast.imaging.volume import resize
 
 MASK_MODES = ("none", "roi_crop", "mask_channel", "foreground_only")
 MASK_POLICIES = ("error", "full_image", "drop")
@@ -56,9 +57,12 @@ class MaskDecision:
                 "fingerprint": rec.fingerprint if rec else "", "detail": self.detail}
 
 
-def _apply_policy(decision: MaskDecision, policy: str) -> MaskDecision:
+def _apply_policy(decision: MaskDecision, policy: str, raise_errors: bool = True) -> MaskDecision:
     if policy not in MASK_POLICIES:
         raise ValueError(f"unknown mask policy {policy!r}")
+    if policy == "error" and not raise_errors:
+        decision.action = "error"          # audit-only mode: report, do not raise
+        return decision
     if policy == "error":
         raise MaskPolicyError(f"mask {decision.status} for {decision.key.as_tuple()}: {decision.detail}")
     decision.action = policy
@@ -86,17 +90,18 @@ def check_mask(record: MaskRecord, key: ImageKey, expected: Geometry | None,
 def resolve_mask(provider: MaskProvider, key: ImageKey, *, fold: int | None, expected: Geometry | None,
                  roi_classes: Sequence[int], missing_policy: str, empty_policy: str,
                  invalid_policy: str = "error", mask_kind: str | None = None,
-                 purpose: str = "mask_mode") -> MaskDecision:
+                 purpose: str = "mask_mode", raise_errors: bool = True) -> MaskDecision:
     """Fetch, validate and apply the configured policy (raises ``MaskPolicyError`` for ``error``)."""
     record = provider.get(key, fold)
     if record is None:
-        return _apply_policy(MaskDecision(key, "missing", "", None, "no mask for key", purpose), missing_policy)
+        return _apply_policy(MaskDecision(key, "missing", "", None, "no mask for key", purpose), missing_policy,
+                             raise_errors)
     status, detail = check_mask(record, key, expected, mask_kind)
     if status != "ok":
-        return _apply_policy(MaskDecision(key, status, "", record, detail, purpose), invalid_policy)
+        return _apply_policy(MaskDecision(key, status, "", record, detail, purpose), invalid_policy, raise_errors)
     if not np.isin(np.asarray(record.array), np.asarray(list(roi_classes))).any():
         return _apply_policy(MaskDecision(key, "empty", "", record, f"no voxels of ROI classes {list(roi_classes)}",
-                                          purpose), empty_policy)
+                                          purpose), empty_policy, raise_errors)
     return MaskDecision(key, "ok", "use", record, "", purpose)
 
 
@@ -127,13 +132,54 @@ def apply_mask_mode(image: np.ndarray, mask: np.ndarray | None, mode: str, *, ro
             image, mask = joint_crop(image, mask, bbox[0], bbox[1], log)
         image, mask = joint_resize(image, mask, out_size, log)
         return image
-    image, mask = joint_resize(image, mask, out_size, log)
-    roi = roi_array(mask, roi_classes)
+    roi, rule = resample_roi(roi_array(mask, roi_classes), out_size)
+    image, _ = joint_resize(image, None, out_size, log)
+    log.append({"op": "roi_resample", "rule": rule, "to": [int(v) for v in out_size]})
+    if not roi.any():  # cannot happen for a non-empty native ROI (any-overlap keeps every ROI voxel)
+        raise MaskPolicyError("ROI became empty after resampling")
     if mode == "mask_channel":
         log.append({"op": "mask_channel", "roi_classes": [int(c) for c in roi_classes]})
         return np.concatenate([image, roi[None]], axis=0).astype(np.float32)
     log.append({"op": "foreground_only", "roi_classes": [int(c) for c in roi_classes]})
     return (image * roi[None]).astype(np.float32)
+
+
+def resample_roi(roi: np.ndarray, out_size: Sequence[int]) -> tuple[np.ndarray, str]:
+    """ROI on the target grid for ``mask_channel`` / ``foreground_only``.
+
+    Primary rule ``linear>0``: the binary ROI is resampled with the SAME interpolation as the image
+    (bilinear/trilinear, ``align_corners=False``) and thresholded at > 0, i.e. a target voxel is ROI iff the
+    lesion contributes to its interpolated image value (ROI and image content stay aligned). If that is
+    empty although the native ROI is not (lesion between sampling points when downsampling), the
+    ``any_overlap`` rule (:func:`resample_roi_any`) is used so a lesion never silently vanishes.
+    """
+    roi = (np.asarray(roi) > 0).astype(np.float32)
+    if tuple(roi.shape) == tuple(int(v) for v in out_size):
+        return roi, "identity"
+    linear = (resize(roi, out_size) > 1e-6).astype(np.float32)
+    if linear.any() or not roi.any():
+        return linear, "linear>0"
+    return resample_roi_any(roi, out_size), "any_overlap"
+
+
+def resample_roi_any(roi: np.ndarray, out_size: Sequence[int]) -> np.ndarray:
+    """Resample a binary ROI so that an output voxel is ROI iff its footprint overlaps any ROI voxel.
+
+    Output voxel ``o`` on an axis of length ``n -> m`` covers input voxels
+    ``[floor(o*n/m), max(floor(o*n/m)+1, ceil((o+1)*n/m)))`` (the same floor/ceil rule as
+    ``resize_box``). Downsampling therefore never deletes a lesion (max/any pooling);
+    upsampling equals nearest replication. Used for ``mask_channel`` / ``foreground_only``.
+    """
+    out = np.asarray(roi) > 0
+    for axis, m in enumerate(int(v) for v in out_size):
+        n = out.shape[axis]
+        if n == m:
+            continue
+        starts = np.floor(np.arange(m) * n / m).astype(int)
+        ends = np.maximum(starts + 1, np.ceil((np.arange(m) + 1) * n / m).astype(int))
+        out = np.stack([np.take(out, np.arange(a, b), axis=axis).any(axis=axis) for a, b in zip(starts, ends)],
+                       axis=axis)
+    return out.astype(np.float32)
 
 
 def audit_frame(decisions: Sequence[MaskDecision]) -> pd.DataFrame:

@@ -104,7 +104,8 @@ class ImagePredictor:
         outputs = []
         with torch.no_grad():
             for x, _, _ in loader:
-                outputs.append(torch.softmax(self.network(x.float()), dim=1).cpu().numpy())
+                # float64 softmax: float32 saturates to exactly 1.0 and creates artificial ROC ties
+                outputs.append(torch.softmax(self.network(x.float()).double(), dim=1).cpu().numpy())
         return table, np.concatenate(outputs, axis=0)
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
@@ -167,13 +168,23 @@ class ImageBranch:
             out["annotation_coverage"] = self.annotation_map(frame)[1]
         if self.settings.uses_masks:
             manifest = load_manifest_for(self.settings)
-            builder = ItemBuilder(self.settings, self.mask_provider, manifest)
-            table = builder.build(frame, None)
-            audit = audit_frame(table.decisions)
-            out["mask_audit"] = audit
-            images_in = len(table.items) + int((audit["action"] == "drop").sum()) if len(audit) else len(table.items)
-            out["mask_audit_summary"] = summarize_mask_audit(audit, len(frame), table.studies_with_items,
-                                                             images_in, len(table.items))
+            # audit-only: policy "error" is reported (action "error"), never raised
+            builder = ItemBuilder(self.settings, self.mask_provider, manifest, raise_errors=False)
+            describe = self.mask_provider.describe() if self.mask_provider is not None else {}
+            folds: list[int | None] = [int(f) for f in describe.get("folds", []) or []] or [None]
+            audits, summaries = [], []
+            for fold in folds:
+                table = builder.build(frame, fold)
+                audit = audit_frame(table.decisions)
+                audit.insert(0, "fold", "" if fold is None else fold)
+                audits.append(audit)
+                excluded = int(audit["action"].isin(["drop", "error"]).sum()) if len(audit) else 0
+                summary = summarize_mask_audit(audit, len(frame), table.studies_with_items,
+                                               len(table.items) + excluded, len(table.items))
+                summary.insert(0, "fold", "" if fold is None else fold)
+                summaries.append(summary)
+            out["mask_audit"] = pd.concat(audits, ignore_index=True)
+            out["mask_audit_summary"] = pd.concat(summaries, ignore_index=True)
         return out
 
     # ------------------------------------------------------------------ fit

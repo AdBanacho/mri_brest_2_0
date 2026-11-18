@@ -234,3 +234,14 @@ with the score. UIDs are `2.25.<random>`; no real patient data.
 | Artifact names | `tabular_preprocessor.joblib`, `<model>_model.joblib`, `tabular_*names.txt` | architecture names (§5) | `test_tabular_branch_round_trip` |
 | Metadata patient id | `astype(str)` | same in legacy profile; stripped in `general` | — |
 | Image-only runs | tabular always loaded | tabular groups only when `tabular` in branches | `test_image_only_branch_skips_tabular` |
+
+## Known limitation: data-based label-leak check
+
+`predictor_policy.check_label_leakage` (`src/mribreast/data/predictor_policy.py`) rejects a feature
+column only when its values are an exact copy (`np.allclose`) of the label or the Oncotype score.
+Transformed leaks are **not** caught: `1 - label`, `score / 100`, or the label stored as text
+("low"/"high"). The primary defence is the name-based, versioned allowed-predictor policy
+(`allowed_predictors_v1.json`): only listed columns per group and prediction time may enter the
+model. Adding a new feature source therefore requires an explicit policy entry and a human review
+of its provenance. Demonstrated by `tests/review/test_review_splits_leakage.py::test_label_leakage_guard_only_catches_exact_copies`
+(independent review, 2026-11-18).

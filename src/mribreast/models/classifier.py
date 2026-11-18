@@ -129,7 +129,7 @@ class ImageClassifier(pl.LightningModule):
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss, logits, y = self._step(batch, "val")
         study = batch[2] if len(batch) > 2 else torch.arange(len(y), device=y.device) + batch_idx * len(y)
-        self._val_outputs.append((torch.softmax(logits, dim=1).detach().cpu(), y.detach().cpu(),
+        self._val_outputs.append((torch.softmax(logits.detach().double(), dim=1).cpu(), y.detach().cpu(),
                                   study.detach().cpu()))
         return loss
 
@@ -142,7 +142,7 @@ class ImageClassifier(pl.LightningModule):
         unique, inverse = np.unique(studies, return_inverse=True)
         study_probs = aggregate_study_probs(probs, inverse, len(unique), self.aggregation, self.positive_class)
         study_labels = np.array([labels[inverse == i][0] for i in range(len(unique))])
-        p = torch.as_tensor(study_probs, dtype=torch.float32)
+        p = torch.as_tensor(study_probs, dtype=torch.float64)
         t = torch.as_tensor(study_labels, dtype=torch.long)
         auc = float(multiclass_auroc(p, t, num_classes=self.num_classes, average="macro"))
         recall = multiclass_recall(p.argmax(dim=1), t, num_classes=self.num_classes, average=None)

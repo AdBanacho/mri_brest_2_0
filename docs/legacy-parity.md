@@ -116,7 +116,7 @@ Historical/stand-alone (not reachable from the controller):
 | T31 | run_5fold_cv | `StratifiedGroupKFold(n, shuffle, seed)` + inner `make_inner_calibration_split(seed+fold)` | `protocol.splits.make_split_plan` (`selection_split=shared`) | bit-identical | tests/parity/test_parity_protocol.py | verified |
 | T32 | " | `_validate_cv_inputs` / `_validate_fold_separation` (labels 0..C-1, ≥ num_folds groups per class, no leakage) | `splits._check_cohort`, `validate_split_plan` | — | tests/unit/test_protocol_splits.py | verified |
 | T33 | " | tabular `compute_sample_weight('balanced')` × positive_boost for label 1 | `tabular.models.balanced_sample_weights` | — | tests/unit/test_tabular_branch.py | verified |
-| T34 | `_compute_balanced_class_weights` | `total/(C·count)` with `weights[1]*=boost` | `models.classifier.compute_balanced_class_weights` | — | tests/unit/test_models_networks.py *(parity planned: tests/parity/test_parity_weights.py)* | verified |
+| T34 | `_compute_balanced_class_weights` | `total/(C·count)` with `weights[1]*=boost` | `models.classifier.compute_balanced_class_weights` | — | tests/unit/test_models_networks.py + tests/parity/test_parity_inputs_weights.py | verified |
 | T35 | run_5fold_cv | `ModelCheckpoint(monitor=val_auc_roc, max, save_top_k=1, save_last)`, filename with auc/bal/sens | `fold_k/image/best.ckpt`, `last.ckpt` | same monitor and data (calibration split); fixed filename; metrics go to `image_branch.json`/`history.csv` | tests/unit/test_protocol_train_validate.py | extended |
 | T36 | " | `EarlyStopping(patience 8, min_delta 1e-4)` declared but **commented out** | `early_stopping=false`, `early_stopping_patience=8`, `early_stopping_min_delta=1e-4` | off by default, as in legacy | tests/unit/test_models_networks.py *(planned)* | verified |
 | T37 | " | `DebugBatchShapeCallback`, `_BestValidationMetrics`, TensorBoard logger `logs_root/<name>/fold_k`, CV plots in `cross_validation_summary` | logger and callbacks owned by the runner | debug shape printing dropped | — | historical |
@@ -252,6 +252,6 @@ Historical/stand-alone (not reachable from the controller):
 | Fusion, binary metrics | verified | tests/parity/test_parity_protocol.py | 1e-15 / 1e-12 |
 | Cohort and labels | verified by the data agent | tests/unit/test_data_legacy_parity.py | exact |
 | DICOM→NIfTI against the legacy SimpleITK path | verified | tests/unit/test_prepare_dicom_to_nifti.py | voxels exact, affine 1e-4 mm |
-| Image inputs (normalisation, resize, subtraction) against legacy `NiftiDataset` | *(planned: tests/parity/test_parity_imaging.py)* | coordinator | float32 atol 1e-5 suggested |
-| Class and sample weights against legacy `_compute_balanced_class_weights` / sample weights | *(planned: tests/parity/test_parity_weights.py)* | coordinator | exact |
+| Image inputs (normalisation, resize, subtraction: none/post_minus_pre/consecutive) against legacy `NiftiDataset` (MONAI path) | verified | tests/parity/test_parity_inputs_weights.py | float32 atol 1e-4, rtol 1e-4 |
+| Class and sample weights against legacy `_compute_balanced_class_weights` / sample weights | verified | tests/parity/test_parity_inputs_weights.py | 1e-6 (torch float32) / 1e-12 |
 | Report columns of a real new evaluation exported to the legacy layout | *(planned: e2e)* `export_evaluation_dir` is unit-tested on a synthetic eval dir that has the `protocol.validate` file shapes | coordinator | — |

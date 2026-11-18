@@ -222,3 +222,26 @@ def test_nifti_mask_geometry_mismatch_is_invalid(tmp_path):
                                target_size=(6, 5, 3), mask_mode="mask_channel")
     with pytest.raises(MaskPolicyError, match="invalid_geometry"):
         ItemBuilder(settings, LocalFileMaskProvider(tmp_path / "masks.csv"), None).build(studies, None)
+
+
+def test_roi_resampling_keeps_small_lesions_and_audit_only_mode(tmp_path):
+    from mribreast.imaging.masks.policies import resample_roi, resample_roi_any
+
+    roi = np.zeros((32, 24), np.float32)
+    roi[3, 2] = 1                                                     # between bilinear sampling points
+    out, rule = resample_roi(roi, (8, 6))
+    assert rule == "any_overlap" and out.sum() == 1 and out[0, 0] == 1
+    assert resample_roi_any(roi, (64, 48)).sum() == 4                 # upsampling = nearest replication
+    big = np.zeros((32, 24), np.float32)
+    big[8:20, 4:12] = 1
+    assert resample_roi(big, (8, 6))[1] == "linear>0"
+    studies = synthetic_studies(1, phases=2)
+    write_nifti_series(tmp_path, studies, (12, 10, 6), seed=0)
+    settings = ImagingSettings(image_root=str(tmp_path), phase_count=2, target_size=(6, 5, 3),
+                               mask_mode="mask_channel", mask_missing_policy="error")
+    provider = SyntheticMaskProvider(0, missing_keys=frozenset({(studies.patient_id[0], studies.study_id[0],
+                                                                 studies.series_uids[0][0], "")}))
+    with pytest.raises(MaskPolicyError):
+        ItemBuilder(settings, provider, None).build(studies, None)
+    table = ItemBuilder(settings, provider, None, raise_errors=False).build(studies, None)
+    assert len(table.items) == 0 and table.decisions[0].action == "error"

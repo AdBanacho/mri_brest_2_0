@@ -88,7 +88,9 @@ def import_legacy(repo: Path, dotted: str) -> ModuleType:
         finally:
             with contextlib.suppress(ValueError):
                 sys.path.remove(root)
-    if not str(getattr(module, "__file__", "")).startswith(root):
+    # Compare resolved paths: "C:/code/x" (env var) and "C:\code\x" name the same repository.
+    module_file = Path(str(getattr(module, "__file__", "") or "")).resolve()
+    if not module_file.is_relative_to(Path(root).resolve()):
         raise ImportError(f"{dotted} resolved outside the reference repo: {module.__file__}")
     return module
 
