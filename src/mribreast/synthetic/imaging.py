@@ -116,8 +116,7 @@ def write_2d_dataset(root: str | os.PathLike, studies: pd.DataFrame, size: Seque
     for k, row in enumerate(studies.itertuples(index=False)):
         patient, study = str(getattr(row, PATIENT_ID)), str(getattr(row, STUDY_ID))
         label = int(getattr(row, LABEL))
-        uids = parse_series_uids(getattr(row, SERIES_UIDS, "")) if hasattr(row, SERIES_UIDS) else ()
-        series = uids[0] if uids else f"{study}-2d"
+        series = f"{study}.2d"   # ready 2D images are their own series (never a NIfTI UID -> no mask-key clash)
         count = 1 + k % n_images_per_study if vary_count else n_images_per_study
         for index in range(count):
             rng = np.random.default_rng([seed, _crc("img2d", study, index)])
@@ -148,88 +147,111 @@ def _pick(n: int, n_missing: int, n_empty: int, seed: int) -> tuple[set[int], se
 def write_masks(root: str | os.PathLike, studies_or_manifest: pd.DataFrame | str | os.PathLike, *, seed: int = 0,
                 n_missing: int = 1, n_empty: int = 1, image_root: str | os.PathLike | None = None,
                 boxes: pd.DataFrame | None = None, folds: Sequence[int] | None = None,
-                source: str = "predicted", provenance: str = "frozen_external") -> Path:
-    """Write masks + ``manifest.csv`` (LocalFileMaskProvider format); returns the manifest path.
+                source: str = "predicted", provenance: str = "frozen_external",
+                nifti_studies: pd.DataFrame | None = None) -> Path:
+    """Write masks + ``<root>/manifest.csv`` (LocalFileMaskProvider format); returns the manifest path.
 
     * ``studies_or_manifest`` = path of a 2D image manifest -> one PNG/TIFF mask per image
       (lesion box from the manifest's ``lesion_box`` column).
     * ``studies_or_manifest`` = study DataFrame (+ ``image_root``) -> one NIfTI volume mask
       (``slice_id`` empty) per study on the grid of its first series; lesion region as in
-      :func:`write_nifti_series` (pass the same ``boxes``/``seed``).
-    ``n_missing`` items get no manifest row, ``n_empty`` items get an all-background mask.
+      :func:`write_nifti_series` (pass the same ``boxes``/``seed``).  Slices for
+      ``image_source=nifti, image_dim=2d`` are extracted from these volume masks.
+    * ``nifti_studies`` (+ ``image_root``) together with a 2D manifest -> ONE manifest that
+      covers both the ready 2D images and the NIfTI series (both image paths of the
+      synthetic dataset can then use the same ``mask_manifest_file``).
+    ``n_missing`` items per set get no manifest row, ``n_empty`` items get an all-background mask.
     ``folds`` -> one mask set per fold (``fold`` column, ``training_provenance=fold_trained:<k>``,
     region shifted by one voxel per fold to mimic different segmenters).
     """
-    import tifffile
-    from PIL import Image
-
-    from mribreast.imaging.manifest import read_image_file
-
     root = Path(root)
     (root / "files").mkdir(parents=True, exist_ok=True)
     fold_list: list[int | None] = list(folds) if folds else [None]
+    common = dict(seed=seed, n_missing=n_missing, n_empty=n_empty, fold_list=fold_list, source=source,
+                  provenance=provenance)
     rows: list[dict[str, Any]] = []
     if isinstance(studies_or_manifest, (str, os.PathLike)):
-        manifest_path = Path(studies_or_manifest)
-        images = pd.read_csv(manifest_path, dtype=str, keep_default_na=False)
-        missing, empty = _pick(len(images), n_missing, n_empty, seed)
-        for position, image_row in enumerate(images.itertuples(index=False)):
-            if position in missing:
-                continue
-            path = Path(image_row.path)
-            path = path if path.is_absolute() else manifest_path.parent / path
-            height, width = read_image_file(path).shape[1:]
-            box = json.loads(image_row.lesion_box) if getattr(image_row, "lesion_box", "") else None
-            for fold in fold_list:
-                mask = np.zeros((height, width), dtype=np.uint8)
-                if position not in empty:
-                    if box is None:
-                        r0, r1, c0, c1 = height // 4, height // 2, width // 4, width // 2
-                    else:
-                        r0, r1, c0, c1 = box
-                    shift = 0 if fold is None else int(fold) % 2
-                    mask[min(r0 + shift, height - 1):r1, c0:c1] = 1
-                suffix = Path(path).suffix.lower()
-                tag = "" if fold is None else f"_f{fold}"
-                rel = f"files/{_safe(image_row.study_id)}_{_safe(image_row.slice_id)}{tag}_mask{suffix}"
-                if suffix == ".png":
-                    Image.fromarray(mask).save(root / rel)
-                else:
-                    tifffile.imwrite(str(root / rel), mask)
-                rows.append(_mask_row(image_row.patient_id, image_row.study_id, image_row.series_id,
-                                      image_row.slice_id, rel, fold, source, provenance))
+        rows += _masks_2d(root, Path(studies_or_manifest), **common)
+        if nifti_studies is not None:
+            rows += _masks_nifti(root, nifti_studies, image_root, boxes, **common)
     else:
-        if image_root is None:
-            raise ValueError("NIfTI masks need image_root (the grid of each study's first series)")
-        from mribreast.imaging.geometry import series_path
-
-        studies = studies_or_manifest.reset_index(drop=True)
-        box_map = _boxes_map(boxes)
-        missing, empty = _pick(len(studies), n_missing, n_empty, seed)
-        for position, row in enumerate(studies.itertuples(index=False)):
-            if position in missing:
-                continue
-            patient, study = str(getattr(row, PATIENT_ID)), str(getattr(row, STUDY_ID))
-            uid = parse_series_uids(getattr(row, SERIES_UIDS))[0]
-            reference = nib.load(str(series_path(image_root, uid)))
-            shape = tuple(int(s) for s in reference.shape[:3])
-            starts, ends = _region_for(patient, study, shape, box_map, seed)
-            for fold in fold_list:
-                mask = np.zeros(shape, dtype=np.uint8)
-                if position not in empty:
-                    shift = 0 if fold is None else int(fold) % 2
-                    region = tuple(slice(min(a + (shift if axis == 0 else 0), s - 1), b)
-                                   for axis, (a, b, s) in enumerate(zip(starts, ends, shape)))
-                    mask[region] = 1
-                tag = "" if fold is None else f"_f{fold}"
-                rel = f"files/{_safe(uid)}{tag}_mask.nii.gz"
-                nib.save(nib.Nifti1Image(mask, reference.affine), str(root / rel))
-                rows.append(_mask_row(patient, study, uid, "", rel, fold, source, provenance))
+        rows += _masks_nifti(root, studies_or_manifest, image_root, boxes, **common)
     manifest = root / "manifest.csv"
     from mribreast.imaging.masks.local import mask_manifest_frame
 
     mask_manifest_frame(rows).to_csv(manifest, index=False)
     return manifest
+
+
+def _masks_2d(root: Path, manifest_path: Path, *, seed: int, n_missing: int, n_empty: int,
+              fold_list: list[int | None], source: str, provenance: str) -> list[dict[str, Any]]:
+    import tifffile
+    from PIL import Image
+
+    from mribreast.imaging.manifest import read_image_file
+
+    rows: list[dict[str, Any]] = []
+    images = pd.read_csv(manifest_path, dtype=str, keep_default_na=False)
+    missing, empty = _pick(len(images), n_missing, n_empty, seed)
+    for position, image_row in enumerate(images.itertuples(index=False)):
+        if position in missing:
+            continue
+        path = Path(image_row.path)
+        path = path if path.is_absolute() else manifest_path.parent / path
+        height, width = read_image_file(path).shape[1:]
+        box = json.loads(image_row.lesion_box) if getattr(image_row, "lesion_box", "") else None
+        for fold in fold_list:
+            mask = np.zeros((height, width), dtype=np.uint8)
+            if position not in empty:
+                if box is None:
+                    r0, r1, c0, c1 = height // 4, height // 2, width // 4, width // 2
+                else:
+                    r0, r1, c0, c1 = box
+                shift = 0 if fold is None else int(fold) % 2
+                mask[min(r0 + shift, height - 1):r1, c0:c1] = 1
+            suffix = Path(path).suffix.lower()
+            tag = "" if fold is None else f"_f{fold}"
+            rel = f"files/{_safe(image_row.study_id)}_{_safe(image_row.slice_id)}{tag}_mask{suffix}"
+            if suffix == ".png":
+                Image.fromarray(mask).save(root / rel)
+            else:
+                tifffile.imwrite(str(root / rel), mask)
+            rows.append(_mask_row(image_row.patient_id, image_row.study_id, image_row.series_id,
+                                  image_row.slice_id, rel, fold, source, provenance))
+    return rows
+
+
+def _masks_nifti(root: Path, studies: pd.DataFrame, image_root: str | os.PathLike | None,
+                 boxes: pd.DataFrame | None, *, seed: int, n_missing: int, n_empty: int,
+                 fold_list: list[int | None], source: str, provenance: str) -> list[dict[str, Any]]:
+    if image_root is None:
+        raise ValueError("NIfTI masks need image_root (the grid of each study's first series)")
+    from mribreast.imaging.geometry import series_path
+
+    rows: list[dict[str, Any]] = []
+    studies = studies.reset_index(drop=True)
+    box_map = _boxes_map(boxes)
+    missing, empty = _pick(len(studies), n_missing, n_empty, seed + 1)
+    for position, row in enumerate(studies.itertuples(index=False)):
+        if position in missing:
+            continue
+        patient, study = str(getattr(row, PATIENT_ID)), str(getattr(row, STUDY_ID))
+        uid = parse_series_uids(getattr(row, SERIES_UIDS))[0]
+        reference = nib.load(str(series_path(image_root, uid)))
+        shape = tuple(int(s) for s in reference.shape[:3])
+        starts, ends = _region_for(patient, study, shape, box_map, seed)
+        for fold in fold_list:
+            mask = np.zeros(shape, dtype=np.uint8)
+            if position not in empty:
+                shift = 0 if fold is None else int(fold) % 2
+                region = tuple(slice(min(a + (shift if axis == 0 else 0), s - 1), b)
+                               for axis, (a, b, s) in enumerate(zip(starts, ends, shape)))
+                mask[region] = 1
+            tag = "" if fold is None else f"_f{fold}"
+            rel = f"files/{_safe(uid)}{tag}_mask.nii.gz"
+            nib.save(nib.Nifti1Image(mask, reference.affine), str(root / rel))
+            rows.append(_mask_row(patient, study, uid, "", rel, fold, source, provenance))
+    return rows
 
 
 def _mask_row(patient: str, study: str, series: str, slice_id: str, rel: str, fold: int | None, source: str,

@@ -716,7 +716,12 @@ if ((${#cleanup_targets[@]})); then
     [[ "${F_SECTION[$key]}" == path && -n "${PATHS[$key]}" ]] || continue
     check_keys_list+=("$key") check_values+=("${PATHS[$key]}")
   done
-  mapfile -t check_values < <(realpath -m -- "${check_values[@]}" "${HOME:-/}" "$PROJECT_ROOT")
+  if [[ "$IS_WINDOWS" == true ]]; then
+    mapfile -t check_values < <(cygpath -u -- "${check_values[@]}" "${HOME:-/}" "$PROJECT_ROOT")
+    mapfile -t check_values < <(realpath -m -- "${check_values[@]}")
+  else
+    mapfile -t check_values < <(realpath -m -- "${check_values[@]}" "${HOME:-/}" "$PROJECT_ROOT")
+  fi
   for i in "${!check_keys_list[@]}"; do POSIX[${check_keys_list[$i]}]=${check_values[$i]}; done
   home_dir=${check_values[${#check_keys_list[@]}]} root_dir=${check_values[${#check_keys_list[@]} + 1]}
   for target_key in "${cleanup_targets[@]}"; do

@@ -88,10 +88,11 @@ class ConfigError(ValueError):
 
 
 def _parse_bool(text: str) -> bool:
+    # Strict, identical to the Bash controller (and legacy): only true/false.
     lowered = str(text).strip().lower()
-    if lowered in ("true", "1", "yes"):
+    if lowered == "true":
         return True
-    if lowered in ("false", "0", "no"):
+    if lowered == "false":
         return False
     raise ConfigError(f"expected true/false, got {text!r}")
 

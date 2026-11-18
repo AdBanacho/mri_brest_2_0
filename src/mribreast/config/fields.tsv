@@ -43,6 +43,7 @@ mask_roi_classes	train	csv	1		1	new	Mask class codes treated as ROI (comma list)
 roi_margin	train	float	0.1		1	new	roi_crop margin as fraction of bbox extent per axis
 mask_missing_policy	train	choice	error	error|full_image|drop	1	new	Missing mask: fail, use full image, or drop sample (audited)
 mask_empty_policy	train	choice	full_image	error|full_image|drop	1	new	Empty ROI mask policy
+mask_invalid_policy	train	choice	error	error|full_image|drop	1	new	Invalid mask (key/geometry mismatch, bad codes): fail, use full image, or drop sample (audited)
 mask_provenance	train	choice	unknown	unknown|frozen_external|fold_trained	1	new	Segmenter provenance; fold_trained requires per-fold mask sets
 feature_groups	train	csv	clinical	clinical|kinetic|morphology|heterogeneity|density	1	legacy	Tabular feature groups (comma list)
 feature_model	train	choice	xgboost	xgboost|mlp	1	legacy	Tabular model

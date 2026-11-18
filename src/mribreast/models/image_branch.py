@@ -219,8 +219,11 @@ class ImageBranch:
         workers = int(cfg.get("num_workers", 0))
         pin = torch.cuda.is_available()
         # Legacy NiftiDataModule does not shuffle the training loader.
+        # Deviation (documented): a trailing training batch of exactly ONE sample cannot pass BatchNorm in
+        # train mode (legacy crashed there); it is dropped. Any other remainder is kept, as in legacy.
+        singleton_tail = batch_size > 1 and len(train_ds) % batch_size == 1
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=workers,
-                                  pin_memory=pin)
+                                  pin_memory=pin, drop_last=singleton_tail)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=workers, pin_memory=pin)
 
         class_weights = compute_balanced_class_weights(fit_table.items["label"].to_numpy(dtype=int), self.num_classes,

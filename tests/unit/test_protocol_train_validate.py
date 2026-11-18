@@ -9,7 +9,7 @@ import pytest
 
 from mribreast.artifacts import ArtifactMismatch, is_complete, read_json, write_json_atomic
 from mribreast.config import schema
-from mribreast.contracts import prob_columns
+from mribreast.contracts import STUDY_ID, prob_columns
 from mribreast.protocol import splits
 from mribreast.protocol.manifests import directory_fingerprints
 from mribreast.protocol.train import run_training
@@ -322,3 +322,42 @@ def test_validation_is_idempotent_and_needs_complete_training(tmp_path):
     with pytest.raises(FileNotFoundError, match="no training run"):
         run_validation(make_cfg("validate"), cohort, trainers, checkpoint_root=tmp_path / "ck",
                        validation_root=tmp_path / "val_ck", input_fingerprints={**FPS, "metadata_file": "sha256:other"})
+
+
+class _DroppingTrainer(FakeTrainer):
+    """Image-like branch that cannot score some studies (mask policy ``drop``): NaN probability rows."""
+
+    def __init__(self, *args, drop: set, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.drop = drop
+
+    def load(self, directory, fold):
+        predictor = super().load(directory, fold)
+        inner, drop = predictor.predict_proba, self.drop
+
+        def predict_proba(frame):
+            p = inner(frame).copy()
+            p[frame[STUDY_ID].astype(str).isin(drop).to_numpy()] = np.nan
+            return p
+
+        predictor.predict_proba = predict_proba
+        return predictor
+
+
+def test_studies_without_prediction_are_excluded_from_all_branches_and_audited(tmp_path):
+    cohort = make_fake_cohort(40)
+    drop = set(cohort.frame[STUDY_ID].astype(str).iloc[::7])
+    trainers = {"image": _DroppingTrainer("image", "signal_image", drop=drop),
+                "tabular": FakeTrainer("tabular", "signal_tabular")}
+    _, out, _, _ = _run(tmp_path, cohort=cohort, trainers=trainers)
+    excluded = pd.read_csv(out / "excluded_studies.csv")
+    assert set(excluded.loc[excluded["split"] == "outer_eval", STUDY_ID].astype(str)) == drop
+    metrics = pd.read_csv(out / "validation_metrics.csv")
+    assert metrics["excluded_outer_validation_studies"].sum() == len(drop)
+    assert (metrics["evaluated_outer_validation_studies"] + metrics["excluded_outer_validation_studies"]
+            == metrics["outer_validation_rows"]).all()
+    preds = pd.read_csv(out / "predictions_validation.csv")
+    assert not preds[STUDY_ID].astype(str).isin(drop).any()
+    counts = preds.groupby("branch")[STUDY_ID].count()
+    assert counts.nunique() == 1  # same denominator for image, tabular and fusion
+    assert json.loads((out / "evaluation_manifest.json").read_text())["excluded_studies"] == len(excluded)

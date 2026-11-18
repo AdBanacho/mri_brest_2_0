@@ -53,7 +53,8 @@ def make_synthetic_dataset(out: Path, *, n_patients: int = 48, seed: int = 0, sh
     info["image_root"] = out / "nifti"
     info["image_manifest_file"] = synth_imaging.write_2d_dataset(out / "images2d", studies, size=tuple(size_2d),
                                                                  n_images_per_study=images_per_study, seed=seed)
-    info["mask_manifest_file"] = synth_imaging.write_masks(out / "masks", info["image_manifest_file"], seed=seed)
+    info["mask_manifest_file"] = synth_imaging.write_masks(out / "masks", info["image_manifest_file"], seed=seed,
+                                                       nifti_studies=studies, image_root=out / "nifti", boxes=boxes)
     info["studies"] = studies
     shutil.rmtree(out / "_tables", ignore_errors=True)
     return info

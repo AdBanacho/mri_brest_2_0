@@ -89,7 +89,7 @@ def build_mask_provider(cfg: Mapping[str, Any]):
     if cfg["mask_provider"] == "local_files":
         from mribreast.imaging.masks.local import LocalFileMaskProvider
 
-        return LocalFileMaskProvider(cfg["mask_manifest_file"])
+        return LocalFileMaskProvider(cfg["mask_manifest_file"], slice_axis=cfg["slice_axis"])
     from mribreast.imaging.masks.synthetic import SyntheticMaskProvider
 
     return SyntheticMaskProvider(seed=cfg["seed"])
@@ -212,6 +212,13 @@ def cmd_import_legacy(argv: Sequence[str]) -> int:
     return importer.main(list(argv))
 
 
+def cmd_prepare_data(argv: Sequence[str]) -> int:
+    """Explicit data-preparation tools (NBIA download, DICOM->NIfTI, MAMA-MIA); own optional deps."""
+    from mribreast.prepare import cli as prepare_cli
+
+    return int(prepare_cli.main(list(argv)) or 0)
+
+
 def cmd_fields(argv: Sequence[str]) -> int:
     """Print the field registry (for docs / controller debugging)."""
     p = argparse.ArgumentParser(prog="mribreast fields")
@@ -230,6 +237,7 @@ COMMANDS = {
     "summarize": cmd_summarize,
     "make-synthetic": cmd_make_synthetic,
     "import-legacy": cmd_import_legacy,
+    "prepare-data": cmd_prepare_data,
     "fields": cmd_fields,
 }
 

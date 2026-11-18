@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Separate, explicit data-preparation stage (network + DICOM). Never imported by train/validate.
-prepare = ["requests>=2.31", "pydicom>=2.4", "dicom2nifti>=2.4", "SimpleITK>=2.3"]
+prepare = ["requests>=2.31", "pydicom>=2.4", "SimpleITK>=2.3", "synapseclient>=4.0"]
 tensorboard = ["tensorboard>=2.14"]
 test = ["pytest>=7.4"]
 

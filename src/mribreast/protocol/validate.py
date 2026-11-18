@@ -59,10 +59,28 @@ def _units(table: pd.DataFrame, probs: Mapping[str, np.ndarray], unit: str) -> t
 
 
 def _predict(trainers: Mapping[str, BranchTrainer], predictors: Mapping[str, Any], frame: pd.DataFrame,
-             num_classes: int, alpha: float) -> dict[str, np.ndarray]:
-    ids = frame[STUDY_ID].astype(str).tolist()
-    per_branch = {b: branch_frame(ids, predictors[b].predict_proba(frame), num_classes, b) for b in predictors}
-    return fuse_aligned(ids, per_branch, num_classes, alpha)
+             num_classes: int, alpha: float) -> tuple[pd.DataFrame, dict[str, np.ndarray], list[str]]:
+    """Predict every branch; drop studies a branch could not score (all-NaN rows, e.g. mask policy ``drop``).
+
+    A study excluded by ANY branch is excluded from ALL branches and fusion, so every branch is
+    evaluated on the same denominator.  Returns (kept frame, fused probabilities, excluded study ids).
+    """
+    raw = {b: np.asarray(predictors[b].predict_proba(frame), dtype=float) for b in predictors}
+    keep = np.ones(len(frame), dtype=bool)
+    for b, p in raw.items():
+        if p.shape[0] != len(frame):
+            raise ValueError(f"branch {b} returned {p.shape[0]} rows for {len(frame)} studies")
+        nan_rows = np.isnan(p).any(axis=1)
+        if np.isnan(p[nan_rows]).sum() != nan_rows.sum() * p.shape[1]:
+            raise ValueError(f"branch {b} returned partially missing probability rows")
+        keep &= ~nan_rows
+    excluded = frame.loc[~keep, STUDY_ID].astype(str).tolist()
+    kept = frame.loc[keep].reset_index(drop=True)
+    if kept.empty:
+        raise ValueError("every study was excluded by the branch policies; nothing to evaluate")
+    ids = kept[STUDY_ID].astype(str).tolist()
+    per_branch = {b: branch_frame(ids, p[keep], num_classes, b) for b, p in raw.items()}
+    return kept, fuse_aligned(ids, per_branch, num_classes, alpha), excluded
 
 
 def _csv(frame: pd.DataFrame) -> str:
@@ -128,6 +146,7 @@ def run_validation(cfg: Mapping[str, Any], cohort: CohortTable, trainers: Mappin
                                                       for b in eval_branches}
     fold_curves: dict[str, list[tuple[str, np.ndarray, np.ndarray]]] = {b: [] for b in eval_branches}
     confusion: dict[str, dict[str, Any]] = {b: {"folds": {}} for b in eval_branches}
+    exclusions: list[dict[str, Any]] = []
 
     for fold in folds:
         fold_dir = train_dir / f"fold_{fold}"
@@ -141,8 +160,14 @@ def run_validation(cfg: Mapping[str, Any], cohort: CohortTable, trainers: Mappin
         heldout_rows = len(splits.role_rows(plan, fold, splits.inner_heldout_roles()))
         meta = splits.fold_meta(plan, fold)
 
-        cal_units, cal_probs = _units(thr_frame, _predict(trainers, predictors, thr_frame, num_classes, alpha), unit)
-        ev_units, ev_probs = _units(eval_frame, _predict(trainers, predictors, eval_frame, num_classes, alpha), unit)
+        thr_kept, thr_pred, thr_excluded = _predict(trainers, predictors, thr_frame, num_classes, alpha)
+        ev_kept, ev_pred, ev_excluded = _predict(trainers, predictors, eval_frame, num_classes, alpha)
+        for split_name, ids in (("+".join(thr_roles), thr_excluded), ("outer_eval", ev_excluded)):
+            exclusions.extend({"fold": fold, "split": split_name, STUDY_ID: sid,
+                               "reason": "no prediction from at least one branch (e.g. mask policy drop)"}
+                              for sid in ids)
+        cal_units, cal_probs = _units(thr_kept, thr_pred, unit)
+        ev_units, ev_probs = _units(ev_kept, ev_pred, unit)
         cal_labels = cal_units[LABEL].to_numpy(dtype=np.int64)
         ev_labels = ev_units[LABEL].to_numpy(dtype=np.int64)
 
@@ -164,6 +189,9 @@ def run_validation(cfg: Mapping[str, Any], cohort: CohortTable, trainers: Mappin
             "inner_calibration_rows": heldout_rows,
             "effective_inner_calibration_folds": meta["effective_inner_folds"],
             "outer_validation_rows": len(eval_frame),
+            "excluded_threshold_studies": len(thr_excluded),
+            "excluded_outer_validation_studies": len(ev_excluded),
+            "evaluated_outer_validation_studies": len(ev_kept),
         }
         for b in eval_branches:
             cal_dec = decide(cal_probs[b], thresholds[b], positive)
@@ -234,6 +262,9 @@ def run_validation(cfg: Mapping[str, Any], cohort: CohortTable, trainers: Mappin
         "selection_uses_outer_eval": selection_uses_outer,
         "threshold_uses_outer_eval": "outer_eval" in thr_roles,
         "pooled_metrics": pooled_metrics,
+        "excluded_studies": len(exclusions),
+        "denominator_note": ("metrics use evaluated studies only; see excluded_studies.csv"
+                             if exclusions else "no studies excluded"),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
     validation_config = {**schema.to_jsonable(cfg), "train_id": tid, "eval_id": eid, "run_id": run_id,
@@ -253,6 +284,8 @@ def run_validation(cfg: Mapping[str, Any], cohort: CohortTable, trainers: Mappin
         write_text_atomic(staging / "predictions_calibration.csv", _csv(pd.concat(calibration_preds, ignore_index=True)))
         write_text_atomic(staging / "predictions_validation.csv", _csv(pd.concat(validation_preds, ignore_index=True)))
         write_text_atomic(staging / "branch_comparison.csv", _csv(comparison))
+        write_text_atomic(staging / "excluded_studies.csv",
+                          _csv(pd.DataFrame(exclusions, columns=["fold", "split", STUDY_ID, "reason"])))
         write_json_atomic(staging / "confusion_matrices.json", {"class_names": class_names, "labels": list(range(num_classes)),
                                                                "rows": "true", "columns": "predicted",
                                                                "branches": confusion})
