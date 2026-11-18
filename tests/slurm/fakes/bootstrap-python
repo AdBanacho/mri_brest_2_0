@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Fake module Python for automatic environment setup. Emulates the calls made by
+# prepare_python_environment and delegates real runs to the recording fake python.
+set -euo pipefail
+[[ "${PYTHONNOUSERSITE:-}" == 1 ]] || { echo 'user site not disabled' >&2; exit 3; }
+in_env=false
+[[ "$0" != */runtime-*/* ]] || in_env=true
+case "$*" in
+  --version) printf 'Python 3.11.5\n';;
+  '-c import numpy, torch') [[ "${FAKE_IMPORT_FAIL:-0}" == 0 ]];;
+  '-m pip show numpy torch')
+    torch=2.6.0
+    [[ "$in_env" != true || "${FAKE_REPLACE_TORCH:-0}" == 0 ]] || torch=2.7.1
+    printf 'Name: numpy\nVersion: 1.26.4\nSummary: x\nName: torch\nVersion: %s\n' "$torch";;
+  '-m venv '*)
+    env_dir=${!#}
+    rm -rf -- "$env_dir"
+    mkdir -p "$env_dir/bin"
+    touch "$env_dir/pyvenv.cfg"
+    cp "$0" "$env_dir/bin/python"
+    chmod +x "$env_dir/bin/python";;
+  '-m pip install '*)
+    [[ "${PIP_USER:-}" == false && "${PIP_CONFIG_FILE:-}" == /dev/null ]] || exit 4
+    [[ "$4" == --constraint && "$(cat "$5")" == $'numpy==1.26.4\ntorch==2.6.0' ]] || exit 5
+    printf 'install %s\n' "$*" >> "${FAKE_BOOTSTRAP_LOG:?}"
+    sleep "${FAKE_INSTALL_SLEEP:-0}"
+    [[ "${FAKE_INSTALL_FAIL:-0}" == 0 ]];;
+  '-m pip check') printf 'check\n' >> "$FAKE_BOOTSTRAP_LOG";;
+  '-m mribreast --help')
+    printf 'import mribreast PYTHONPATH=%s\n' "${PYTHONPATH:-}" >> "$FAKE_BOOTSTRAP_LOG"
+    [[ "${FAKE_ENTRY_FAIL:-0}" == 0 ]];;
+  *) exec "${FAKE_BASE_PYTHON:?}" "$@";;
+esac

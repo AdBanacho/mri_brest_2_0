@@ -8,12 +8,12 @@ __pycache__/
 *.nii.gz
 *.dcm
 *.ckpt
-data/
-runs/
+/data/
+/runs/
 lightning_logs/
-logs/
+/logs/
 validation_charts/
-checkpoints/
-prepared/
+/checkpoints/
+/prepared/
 *.xlsx
 !tests/fixtures/**/*.xlsx

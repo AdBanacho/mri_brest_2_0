@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake sbatch: records argv (one per line) and returns increasing job ids.
+set -euo pipefail
+printf '%s\n' "$@" > "${FAKE_SBATCH_LOG:?}"
+n_file=${FAKE_SBATCH_LOG}.count
+n=$(( $(cat "$n_file" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" > "$n_file"
+printf '%s\n' "$((12344 + n))"

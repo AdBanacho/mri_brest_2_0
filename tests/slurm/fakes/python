@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Fake Python interpreter: records each call's argv as <seq>.argv (NUL-separated)
+# and <seq>.lines (one arg per line), plus cwd/environment, then exits.
+set -euo pipefail
+dir=${FAKE_PY_LOG:?}
+mkdir -p "$dir"
+seq=$(( $(find "$dir" -name '*.argv' | wc -l) + 1 ))
+base=$dir/$(printf '%05d' "$seq")
+printf '%s\0' "$@" > "$base.argv"
+printf '%s\n' "$@" > "$base.lines"
+{
+  printf 'cwd=%s\n' "$PWD"
+  printf 'PYTHONNOUSERSITE=%s\n' "${PYTHONNOUSERSITE:-unset}"
+  printf 'PYTHONPATH=%s\n' "${PYTHONPATH:-}"
+  printf 'interpreter=%s\n' "$0"
+} > "$base.env"
+exit "${FAKE_PY_EXIT:-0}"

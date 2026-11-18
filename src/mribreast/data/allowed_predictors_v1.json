@@ -1,0 +1,43 @@
+{
+  "policy_id": "duke_oncotype_allowed_predictors",
+  "version": "1.0",
+  "description": "Predictors allowed when the Oncotype DX risk class is predicted at the time of the pre-treatment breast MRI (Duke Breast Cancer MRI cohort). Based on legacy CLINICAL_FEATURE_POLICY.md (clinical-safe-v2). The workbook has no per-field recording dates: prospective use requires verifying that every allowed field precedes the assay result.",
+  "prediction_times": {
+    "mri": {
+      "clinical": {
+        "columns": [
+          "age_at_diagnosis_years",
+          "menopause",
+          "tumor_laterality",
+          "multicentric_multifocal",
+          "contralateral_breast_involvement",
+          "suspicious_lymph_nodes",
+          "skin_nipple_involvement",
+          "pectoral_chest_involvement"
+        ]
+      },
+      "clinical_sensitive": {
+        "columns": ["race_ethnicity"],
+        "sensitive": true
+      },
+      "kinetic": {"prefixes": ["kinetic_"]},
+      "morphology": {"prefixes": ["morphology_"]},
+      "heterogeneity": {"prefixes": ["heterogeneity_"]},
+      "density": {
+        "columns": ["density_consensus", "density_ordinal_mean"],
+        "note": "Radiologist BI-RADS density read from the same MRI; research reader study covering ~50 of 922 patients."
+      }
+    }
+  },
+  "forbidden": {
+    "exact": ["oncotype_score", "label", "patient_id", "study_id", "series_uids", "oncotypecategory"],
+    "tokens": [
+      "er", "pr", "her2", "receptor", "subtype", "mol",
+      "stage", "staging", "grade", "nottingham", "histologic", "tubule", "nuclear", "mitotic",
+      "metastatic", "metastasis",
+      "surgery", "therapy", "chemotherapy", "endocrine", "radiation", "oophorectomy", "neoadjuvant", "adjuvant",
+      "response", "recurrence", "death", "followup"
+    ],
+    "substrings": ["oncotype", "label", "recurrence_score", "follow_up", "days_to_surgery", "pathologic"]
+  }
+}
