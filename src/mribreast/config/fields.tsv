@@ -45,6 +45,11 @@ mask_missing_policy	train	choice	error	error|full_image|drop	1	new	Missing mask:
 mask_empty_policy	train	choice	full_image	error|full_image|drop	1	new	Empty ROI mask policy
 mask_invalid_policy	train	choice	error	error|full_image|drop	1	new	Invalid mask (key/geometry mismatch, bad codes): fail, use full image, or drop sample (audited)
 mask_provenance	train	choice	unknown	unknown|frozen_external|fold_trained	1	new	Segmenter provenance; fold_trained requires per-fold mask sets
+box_mode	train	choice	none	none|roi_crop|box_channel|dual_stream	1	new	How Duke annotation boxes enter the 3D classifier (training AND inference; needs a box at test time)
+box_margin	train	float	0.1		1	new	box crop margin as fraction of box extent per side, clipped to the volume (roi_crop, dual_stream)
+box_local_size	train	ints	64 64 32		1	new	dual_stream local crop target in loaded-array axis order (3 ints)
+dual_stream_embed_dim	train	int	128		1	new	dual_stream embedding width per encoder
+box_missing_policy	train	choice	error	error|full_image|drop	1	new	Study without an eligible box: fail, use full image, or drop sample (audited in box_audit.csv)
 feature_groups	train	csv	clinical	clinical|kinetic|morphology|heterogeneity|density	1	legacy	Tabular feature groups (comma list)
 feature_model	train	choice	xgboost	xgboost|mlp	1	legacy	Tabular model
 feature_selector	train	choice	none	none|lasso	1	legacy	Fold-local feature selector

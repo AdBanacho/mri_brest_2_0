@@ -74,6 +74,17 @@ def soft_sensitivity_loss(logits: torch.Tensor, y: torch.Tensor, *, num_classes:
     return total, ce, sens_loss, soft
 
 
+def map_inputs(x: Any, fn: Any) -> Any:
+    """Apply ``fn`` to a Tensor input, or to each stream of a multi-input batch (``box_mode=dual_stream``).
+
+    The default collate turns a per-item ``(global, local)`` tuple into a list; the result is a tuple.
+    A single Tensor is passed through ``fn`` unchanged (byte-identical single-input path).
+    """
+    if isinstance(x, (list, tuple)):
+        return tuple(fn(t) for t in x)
+    return fn(x)
+
+
 class ImageClassifier(pl.LightningModule):
     def __init__(self, model: nn.Module, num_classes: int, *, lr: float = 1e-4, class_weights: Any = None,
                  sensitivity_lambda: float = 0.05, loss: str = "ce_soft_sensitivity", optimizer: str = "adam",
@@ -102,11 +113,14 @@ class ImageClassifier(pl.LightningModule):
         self._val_outputs: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
         self._epoch_sums: dict[str, list[float]] = {}
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Any) -> torch.Tensor:
+        """``x``: Tensor ``[B, C, *S]`` or a ``(global, local)`` tuple for dual-stream networks."""
         return self.model(x)
 
     def _step(self, batch: Any, stage: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x, y = batch[0], batch[1]
+        if isinstance(x, list):          # collated (global, local) streams
+            x = tuple(x)
         logits = self(x)
         total, ce, sens_loss, soft = soft_sensitivity_loss(
             logits, y, num_classes=self.num_classes, class_weights=self.class_weights,

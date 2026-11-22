@@ -190,7 +190,7 @@ for key in $OUTPUT_ROOT_KEYS slurm_logs; do [[ "${F_SECTION[$key]:-}" == path ]]
 # Numeric ranges (not part of fields.tsv). [ ] inclusive, ( ) exclusive, empty = unbounded.
 declare -A RANGE=(
   [seed]='[0,' [positive_class]='[0,' [phase_count]='[1,' [slice_axis]='[0,2]' [slices_per_study]='[1,'
-  [annotation_erase_attempts]='[0,' [roi_margin]='[0,2]' [lasso_cv_folds]='[2,' [lasso_cs]='[1,'
+  [annotation_erase_attempts]='[0,' [roi_margin]='[0,2]' [box_margin]='[0,2]' [dual_stream_embed_dim]='[1,' [lasso_cv_folds]='[2,' [lasso_cs]='[1,'
   [lasso_max_iter]='[1,' [lasso_tolerance]='(0,' [lasso_min_features]='[1,' [lasso_plot_top_n]='[0,'
   [xgb_n_estimators]='[1,' [xgb_max_depth]='[1,' [xgb_learning_rate]='(0,' [xgb_subsample]='(0,1]'
   [xgb_colsample_bytree]='(0,1]' [mlp_alpha]='[0,' [mlp_learning_rate]='(0,' [mlp_max_iter]='[1,'
@@ -416,8 +416,15 @@ check_row() { # context
     [[ "${ROW[mask_provenance]}" != fold_trained || "${ROW[mask_provider]}" == none || "${ROW[mask_kind]}" == predicted ]] || bad 'mask_provenance=fold_trained only applies to mask_kind=predicted'
     [[ "${ROW[mask_provider]}" != local_files || -n "${PATHS[mask_manifest_file]}" ]] || bad 'mask_provider=local_files needs PATHS[mask_manifest_file]'
     [[ "${ROW[image_source]}" != manifest_2d || -n "${PATHS[image_manifest_file]}" ]] || bad 'image_source=manifest_2d needs PATHS[image_manifest_file]'
+    nwords "${ROW[box_local_size]}"; ((NWORDS == 3)) || bad "box_local_size needs three positive integers, got '${ROW[box_local_size]}'"
+    if [[ "${ROW[box_mode]}" != none ]]; then
+      [[ "${ROW[image_dim]}" == 3d && "${ROW[image_source]}" == nifti ]] || bad 'box_mode requires image_dim=3d and image_source=nifti'
+      [[ -n "${PATHS[annotation_boxes_file]}" ]] || bad 'box_mode requires annotation_boxes_file (boxes are used at training AND inference)'
+      [[ "${ROW[mask_mode]}" == none && "${ROW[slice_selection]}" != mask_* ]] || bad 'box_mode and mask_mode / mask-based slice selection are mutually exclusive (one source of lesion location)'
+      [[ "${ROW[box_mode]}" != roi_crop || "${ROW[use_annotation_boxes]}" == false ]] || bad 'use_annotation_boxes cannot be combined with box_mode=roi_crop (the erased cuboid is defined on the full target grid)'
+    fi
   else
-    [[ "${ROW[use_annotation_boxes]}" == false && "${ROW[mask_mode]}" == none ]] || bad 'annotation boxes / masks need the image branch'
+    [[ "${ROW[use_annotation_boxes]}" == false && "${ROW[mask_mode]}" == none && "${ROW[box_mode]}" == none ]] || bad 'annotation boxes / masks need the image branch'
   fi
   if [[ "${ROW[selection_split]}" == outer ]]; then
     [[ "$image" == true && "$tabular" == false ]] || bad 'selection_split=outer reproduces the historical image-only protocol; use branches=image'
@@ -447,6 +454,10 @@ axis_active() { # key (reads ROW)
     target_size_2d|slice_axis|slices_per_study|aggregation) has_item "$b" image && [[ "${ROW[image_dim]}" == 2d ]];;
     mask_kind|mask_mode|mask_roi_classes|mask_missing_policy|mask_empty_policy|mask_provenance) has_item "$b" image && [[ "${ROW[mask_provider]}" != none ]];;
     roi_margin) has_item "$b" image && [[ "${ROW[mask_mode]}" == roi_crop ]];;
+    box_mode) has_item "$b" image;;
+    box_missing_policy) has_item "$b" image && [[ "${ROW[box_mode]}" != none ]];;
+    box_margin) has_item "$b" image && [[ "${ROW[box_mode]}" == roi_crop || "${ROW[box_mode]}" == dual_stream ]];;
+    box_local_size|dual_stream_embed_dim) has_item "$b" image && [[ "${ROW[box_mode]}" == dual_stream ]];;
     early_stopping_*) has_item "$b" image && [[ "${ROW[early_stopping]}" == true ]];;
     mri_model|mri_extra_json|subtraction_mode|lr|batch_size|epoch|sensitivity_lambda|positive_boost|optimizer|weight_decay|scheduler|loss|use_annotation_boxes|trainer_extra_json|early_stopping) has_item "$b" image;;
     *) return 0;;
