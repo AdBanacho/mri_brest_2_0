@@ -95,7 +95,11 @@ def test_box_modes_accepted(mode):
 def test_box_fields_change_train_identity():
     base = schema.train_id(schema.resolve("train"))
     assert schema.train_id(schema.resolve("train", {"box_mode": "roi_crop", "annotation_boxes_file": "b"})) != base
-    assert schema.train_id(schema.resolve("train", {"box_margin": "0.2"})) != base
+    # unused box fields stay out of the identity, so train_ids from before box_mode are unchanged
+    assert schema.train_id(schema.resolve("train", {"box_margin": "0.2"})) == base
+    crop = {"box_mode": "roi_crop", "annotation_boxes_file": "b"}
+    assert (schema.train_id(schema.resolve("train", {**crop, "box_margin": "0.2"}))
+            != schema.train_id(schema.resolve("train", crop)))
 
 
 # ----------------------------------------------------------------------------- geometry helper

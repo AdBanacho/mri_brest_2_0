@@ -23,10 +23,28 @@ class DualStreamNetwork(nn.Module):
                  embed_dim: int = 128, dropout: float = DUAL_STREAM_DROPOUT,
                  extra: Mapping[str, Any] | None = None):
         super().__init__()
-        raise NotImplementedError("DualStreamNetwork is not implemented yet")
+        from mribreast.models.networks import make_network
 
-    def forward(self, x: Sequence[torch.Tensor]) -> torch.Tensor:  # pragma: no cover - stub
-        raise NotImplementedError("DualStreamNetwork is not implemented yet")
+        if int(embed_dim) < 1:
+            raise ValueError(f"embed_dim must be a positive integer, got {embed_dim}")
+        self.model_name = str(model_name)
+        self.embed_dim = int(embed_dim)
+        common = dict(spatial_dims=spatial_dims, in_channels=in_channels, num_classes=self.embed_dim)
+        self.global_encoder = make_network(self.model_name, extra=dict(extra or {}), **common)
+        self.local_encoder = make_network(self.model_name, extra=dict(extra or {}), **common)
+        self.head = nn.Sequential(nn.ReLU(), nn.Dropout(float(dropout)),
+                                  nn.Linear(2 * self.embed_dim, int(num_classes)))
+
+    def forward(self, x: Sequence[torch.Tensor]) -> torch.Tensor:
+        if not isinstance(x, (tuple, list)) or len(x) != 2 or not all(isinstance(v, torch.Tensor) for v in x):
+            what = type(x).__name__ + (f" of length {len(x)}" if isinstance(x, (tuple, list)) else "")
+            raise TypeError(f"DualStreamNetwork expects a (global, local) tuple or list of two tensors, got {what}")
+        global_x, local_x = x
+        if global_x.shape[0] != local_x.shape[0]:
+            raise ValueError(f"global and local batch sizes differ: {global_x.shape[0]} vs {local_x.shape[0]}")
+        g = self.global_encoder(global_x).reshape(global_x.shape[0], -1)
+        loc = self.local_encoder(local_x).reshape(local_x.shape[0], -1)
+        return self.head(torch.cat([g, loc], dim=1))
 
 
 __all__ = ["DualStreamNetwork", "DUAL_STREAM_DROPOUT"]

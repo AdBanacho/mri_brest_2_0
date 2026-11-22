@@ -7,6 +7,7 @@ controller with configs/synthetic_cpu_{3d,2d}.conf; see docs/acceptance.md.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -55,13 +56,33 @@ MODES = {
                                  "--mask_mode", "foreground_only", "--mask_missing_policy", "drop",
                                  "--mask_empty_policy", "full_image"],
 }
+CONFIGS = Path(__file__).resolve().parents[2] / "configs"
+BOX_MODES = ("roi_crop", "box_channel", "dual_stream")
+
+
+def config_train_args(path: Path) -> list[str]:
+    """``--key value`` pairs from the ``declare -A TRAIN=( ... )`` block of a controller config."""
+    block = re.search(r"declare -A TRAIN=\((.*?)\n\)", path.read_text(encoding="utf-8"), re.S)
+    assert block, path
+    args: list[str] = []
+    for key, value in re.findall(r"\[(\w+)\]=('[^']*'|\S+)", block.group(1)):
+        args += [f"--{key}", *value.strip("'").split()]
+    return args
+
+
+# annotation boxes as a model input (training AND inference): one synthetic config per box_mode
+for _mode in BOX_MODES:
+    MODES[f"box_{_mode}"] = config_train_args(CONFIGS / f"synthetic_cpu_3d_box_{_mode}.conf")
+
 VALIDATE_EXTRA = {"image_only_3class_historical": ["--threshold_strategy", "fixed_0.5"]}
 
 
 @pytest.mark.parametrize("mode", list(MODES))
 def test_mode_end_to_end(data, mode):
     root, info = data
-    argv = _paths(root, info, mode) + COMMON + MODES[mode]
+    # box configs carry their own sizes/epochs; the shared small-run settings are applied after them
+    argv = (_paths(root, info, mode) + MODES[mode] + COMMON if mode.startswith("box_")
+            else _paths(root, info, mode) + COMMON + MODES[mode])
     assert main(["train", *argv]) == 0
     assert main(["validate", *argv, *VALIDATE_EXTRA.get(mode, []), "--validate_num_workers", "0"]) == 0
     assert main(["summarize", "--validation_root", str(root / mode / "validation_root"),
@@ -80,5 +101,18 @@ def test_mode_end_to_end(data, mode):
     if mode == "ready_2d_multi_image_max":
         excluded = pd.read_csv(out / "excluded_studies.csv")
         assert manifest["excluded_studies"] == len(excluded)
+    if mode.startswith("box_"):
+        metas = sorted((root / mode / "checkpoint_root").rglob("image_branch.json"))
+        assert len(metas) == 3
+        for path in metas:
+            meta = json.loads(path.read_text())
+            assert meta["box"]["mode"] == mode[len("box_"):] and meta["box"]["requires_box_at_inference"] is True
+            audit = pd.read_csv(path.parent / "box_audit.csv")
+            assert set(audit["split"]) == {"fit", "selection"} and set(audit["action"]) <= {"use", "full_image"}
+        if mode == "box_dual_stream":
+            assert meta["network"]["wrapper"] == "dual_stream"
+            assert meta["geometry"]["input_shape"]["local"] == [5, 16, 16, 8]
+        if mode == "box_box_channel":
+            assert meta["channels"][-1] == "annotation_box"
     ranked = pd.read_csv(root / mode / "summary_root" / "ranked_configurations.csv")
     assert len(ranked) == 1

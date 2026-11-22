@@ -338,10 +338,15 @@ def _digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+BOX_IDENTITY_FIELDS = ("box_mode", "box_margin", "box_local_size", "dual_stream_embed_dim", "box_missing_policy")
+
+
 def train_identity(cfg: Mapping[str, Any], input_fingerprints: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Values that define a training run.  Paths enter via content fingerprints when given."""
     ident: dict[str, Any] = {"config_schema_version": CONFIG_SCHEMA_VERSION}
     for f in FIELDS.values():
+        if f.key in BOX_IDENTITY_FIELDS and cfg.get("box_mode", "none") == "none":
+            continue   # box fields only enter the identity when used, so train_ids from before them are unchanged
         if f.section == "train" and f.identity:
             ident[f.key] = format_value(f, cfg[f.key])
         elif f.section == "path" and f.identity:
