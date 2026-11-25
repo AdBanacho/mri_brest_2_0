@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pipeline Workflow Viewer</title>
+  <meta name="description" content="Interactive explanation of the mribreast 2.0 MRI + tabular Oncotype DX pipeline, generated from workflow.json.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#diagram-wrap">Skip to diagram</a>
+  <header class="topbar">
+    <div class="titles">
+      <h1 id="app-title">Pipeline workflow</h1>
+      <p id="app-oneliner" class="oneliner"></p>
+    </div>
+    <nav class="views" role="tablist" aria-label="Views">
+      <button type="button" role="tab" id="tab-pipeline" aria-controls="pipeline-view" aria-selected="true" class="view-tab">Pipeline</button>
+      <button type="button" role="tab" id="tab-configs" aria-controls="config-view" aria-selected="false" class="view-tab" tabindex="-1">Configurations</button>
+    </nav>
+    <div class="top-actions">
+      <button type="button" id="btn-overview" class="btn ghost" title="Show the overview in the side panel (O)">Overview</button>
+      <button type="button" id="btn-help" class="btn ghost" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Keys</button>
+      <button type="button" id="btn-theme" class="btn ghost" title="Toggle light / dark (T)" aria-label="Toggle colour theme">
+        <span class="theme-label">Theme</span>
+      </button>
+    </div>
+  </header>
+
+  <div id="drift-banner" class="banner" hidden role="status"></div>
+
+  <main class="layout" id="pipeline-view" role="tabpanel" aria-labelledby="tab-pipeline">
+    <section class="stage-area" aria-label="Pipeline diagram">
+      <div class="toolbar">
+        <div class="legend" aria-label="Legend">
+          <span class="lg"><span class="sw sw-core"></span>Core step</span>
+          <span class="lg"><span class="sw sw-optional"></span>Optional</span>
+          <span class="lg"><span class="sw sw-alt"></span>Alternative</span>
+          <span class="lg"><span class="sw-line"></span>Data flow</span>
+          <span class="lg"><span class="sw-line loop"></span>Loop (per fold)</span>
+          <span class="lg"><span class="sw-q">?</span>Uncertain / unverified</span>
+        </div>
+        <div class="view-controls">
+          <label class="check"><input type="checkbox" id="chk-labels" checked> Data labels</label>
+          <button type="button" class="btn icon" id="btn-zoom-out" aria-label="Zoom out" title="Zoom out (-)">&minus;</button>
+          <button type="button" class="btn icon" id="btn-zoom-fit" aria-label="Fit to width" title="Fit (0)">Fit</button>
+          <button type="button" class="btn icon" id="btn-zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        </div>
+      </div>
+
+      <div id="overlay-banner" class="overlay-banner" hidden role="status"></div>
+      <div id="diagram-wrap" class="diagram-wrap" tabindex="-1">
+        <svg id="diagram" role="group" aria-label="Flow diagram of pipeline stages. Use Tab or arrow keys to move between stages, Enter to open details."></svg>
+      </div>
+
+      <div class="player" aria-label="Step-through player">
+        <div class="player-controls">
+          <button type="button" class="btn" id="btn-reset" title="Back to the first step (Home)">&#x23EE; Start</button>
+          <button type="button" class="btn" id="btn-back" title="Previous step (B or ,)">&#x25C0; Back</button>
+          <button type="button" class="btn primary" id="btn-play" title="Auto-play / pause (P)">&#x25B6; Play</button>
+          <button type="button" class="btn" id="btn-next" title="Next step (N or .)">Next &#x25B6;</button>
+          <label class="speed" for="speed">Speed
+            <input type="range" id="speed" min="0.5" max="3" step="0.25" value="1" aria-describedby="speed-val">
+            <output id="speed-val">1&times;</output>
+          </label>
+          <span id="step-count" class="step-count" aria-live="polite"></span>
+        </div>
+        <div class="narration" id="narration" aria-live="polite">
+          <p class="muted">Press <kbd>Play</kbd> or <kbd>Next</kbd> to walk through the pipeline one step at a time, or click any box to read about it.</p>
+        </div>
+      </div>
+    </section>
+
+    <aside id="panel" class="panel" aria-label="Details" tabindex="-1">
+      <div id="panel-body"></div>
+    </aside>
+  </main>
+
+  <main id="config-view" class="config-view" role="tabpanel" aria-labelledby="tab-configs" hidden>
+    <div class="subtabs" role="tablist" aria-label="Configuration views">
+      <button type="button" role="tab" class="subtab" data-sub="explorer" aria-selected="true">All valid configurations</button>
+      <button type="button" role="tab" class="subtab" data-sub="options" aria-selected="false" tabindex="-1">Every option (fields.tsv)</button>
+      <button type="button" role="tab" class="subtab" data-sub="shipped" aria-selected="false" tabindex="-1">Shipped config files</button>
+    </div>
+    <section id="sub-explorer" class="sub" aria-label="All valid configurations"></section>
+    <section id="sub-options" class="sub" aria-label="Every option" hidden></section>
+    <section id="sub-shipped" class="sub" aria-label="Shipped config files" hidden></section>
+  </main>
+
+  <footer class="foot">
+    <span id="foot-meta"></span>
+    <span>Sources: <code>workflow.json</code> + project code &rarr; <code>workflow-data.js</code>, <code>config-data.js</code> via <code>python sync_data.py</code>.</span>
+  </footer>
+
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <h2 id="help-title">Keyboard shortcuts</h2>
+    <table class="keys">
+      <tbody>
+        <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Move between stages and controls</td></tr>
+        <tr><td><kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>&rarr;</kbd> <kbd>&darr;</kbd></td><td>Move to the nearest stage in that direction</td></tr>
+        <tr><td><kbd>Enter</kbd> / <kbd>Space</kbd></td><td>Open the focused stage's details</td></tr>
+        <tr><td><kbd>N</kbd> or <kbd>.</kbd></td><td>Next step</td></tr>
+        <tr><td><kbd>B</kbd> or <kbd>,</kbd></td><td>Previous step</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Play / pause</td></tr>
+        <tr><td><kbd>Home</kbd></td><td>Back to the first step</td></tr>
+        <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Slower / faster</td></tr>
+        <tr><td><kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd></td><td>Zoom in / out / fit</td></tr>
+        <tr><td><kbd>D</kbd></td><td>Expand / collapse technical details</td></tr>
+        <tr><td><kbd>O</kbd></td><td>Overview</td></tr>
+        <tr><td><kbd>V</kbd></td><td>Switch Pipeline / Configurations view</td></tr>
+        <tr><td><kbd>T</kbd></td><td>Light / dark theme</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Close this dialog / clear selection</td></tr>
+      </tbody>
+    </table>
+    <form method="dialog"><button class="btn primary" type="submit">Close</button></form>
+  </dialog>
+
+  <script src="workflow-data.js"></script>
+  <script src="config-data.js"></script>
+  <script src="app.js"></script>
+  <script src="configs.js"></script>
+</body>
+</html>

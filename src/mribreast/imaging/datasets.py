@@ -3,6 +3,8 @@
 * 3D NIfTI: one item per study -> ``[C, *target_size]``.
 * 2D from NIfTI: ``slices_per_study`` (or mask-selected) slices per study -> ``[C, H, W]``.
 * 2D manifest: every manifest image of the study -> ``[C, H, W]``.
+* 3D + ``box_mode`` (annotation boxes as input, training AND inference): ``roi_crop`` / ``box_channel``
+  -> one array; ``dual_stream`` -> a ``(global, local)`` tuple (see :mod:`mribreast.imaging.boxes`).
 
 Items carry ``study_index`` (row position in the study frame) so item
 predictions are aggregated back to study level (``aggregate_study_probs``).
@@ -24,6 +26,7 @@ from torch.utils.data import Dataset
 from mribreast.contracts import (LABEL, PATIENT_ID, SERIES_ID, SERIES_UIDS, SLICE_ID, STUDY_ID, Geometry, ImageKey,
                                  MaskProvider)
 from mribreast.imaging.annotations import Box, erase_background_box, resize_box
+from mribreast.imaging.boxes import BoxDecision, BoxInput, build_box_input, decide_boxes
 from mribreast.imaging.geometry import (geometry_from_affine, parse_series_uids, read_header_geometry, series_path,
                                         slice_affine)
 from mribreast.imaging.loader import StudyVolumeLoader
@@ -43,6 +46,8 @@ class ItemTable:
     decisions: list[MaskDecision] = field(default_factory=list)
     notes: list[dict[str, Any]] = field(default_factory=list)   # study-level notes (no images, dropped, ...)
     n_studies: int = 0
+    box_decisions: list[BoxDecision] = field(default_factory=list)   # box_mode only (frame order)
+    box_coverage: pd.DataFrame | None = None                          # annotation_coverage report of the frame
 
     @property
     def studies_with_items(self) -> int:
@@ -68,7 +73,7 @@ class ItemBuilder:
     """Builds ``ItemTable`` objects for a study frame (resolving mask policies)."""
 
     def __init__(self, settings: ImagingSettings, provider: MaskProvider | None, manifest: pd.DataFrame | None,
-                 *, raise_errors: bool = True):
+                 *, raise_errors: bool = True, annotation_boxes: Mapping[str, Box] | None = None):
         self.s = settings
         self.provider = provider
         self.manifest = manifest
@@ -76,6 +81,13 @@ class ItemBuilder:
         self.raise_errors = bool(raise_errors)
         if settings.uses_masks and provider is None:
             raise ValueError("mask_mode / mask-based slice selection require a mask provider")
+        # box_mode: patient -> box (load_annotation_boxes); resolved for every frame, also at inference
+        self.annotation_boxes = dict(annotation_boxes) if annotation_boxes is not None else None
+        if settings.uses_boxes:
+            if settings.image_dim != "3d" or settings.image_source != "nifti":
+                raise ValueError("box_mode requires image_dim=3d and image_source=nifti")
+            if self.annotation_boxes is None:
+                raise ValueError("box_mode requires annotation boxes (also at inference)")
 
     def _resolve(self, key: ImageKey, fold: int | None, expected: Geometry | None, purpose: str) -> MaskDecision:
         assert self.provider is not None
@@ -87,11 +99,17 @@ class ItemBuilder:
     def build(self, frame: pd.DataFrame, fold: int | None) -> ItemTable:
         table = ItemTable(pd.DataFrame(columns=list(ITEM_COLUMNS)), n_studies=len(frame))
         rows: list[dict[str, Any]] = []
+        box_decisions: dict[str, BoxDecision] | None = None
+        if self.s.uses_boxes:
+            assert self.annotation_boxes is not None
+            box_decisions, table.box_coverage = decide_boxes(
+                frame, self.annotation_boxes, self.s.image_root, policy=self.s.box_missing_policy,
+                box_mode=self.s.box_mode, raise_errors=self.raise_errors)
         for index, row in enumerate(frame.itertuples(index=False)):
             if self.s.image_source == "manifest_2d":
                 rows.extend(self._manifest_items(index, row, fold, table))
             elif self.s.image_dim == "3d":
-                rows.extend(self._volume_items(index, row, fold, table))
+                rows.extend(self._volume_items(index, row, fold, table, box_decisions))
             else:
                 rows.extend(self._slice_items(index, row, fold, table))
         if rows:
@@ -99,7 +117,8 @@ class ItemBuilder:
         return table
 
     # --------------------------------------------------------------- 3D
-    def _volume_items(self, index: int, row: Any, fold: int | None, table: ItemTable) -> list[dict[str, Any]]:
+    def _volume_items(self, index: int, row: Any, fold: int | None, table: ItemTable,
+                      box_decisions: Mapping[str, BoxDecision] | None = None) -> list[dict[str, Any]]:
         uids = parse_series_uids(getattr(row, SERIES_UIDS))
         if not uids:
             raise ValueError(f"study {getattr(row, STUDY_ID)} has no series UIDs")
@@ -113,8 +132,19 @@ class ItemBuilder:
                 table.notes.append({"study_index": index, STUDY_ID: key.study_id, "note": "dropped_by_mask_policy"})
                 return []
             action = decision.action
-        return [{"study_index": index, PATIENT_ID: key.patient_id, STUDY_ID: key.study_id, LABEL: _label(row),
-                 SERIES_ID: key.series_id, SLICE_ID: "", "mask_action": action, SERIES_UIDS: "|".join(uids)}]
+        item: dict[str, Any] = {"study_index": index, PATIENT_ID: key.patient_id, STUDY_ID: key.study_id,
+                                LABEL: _label(row), SERIES_ID: key.series_id, SLICE_ID: "", "mask_action": action,
+                                SERIES_UIDS: "|".join(uids)}
+        if box_decisions is not None:
+            box_decision = box_decisions[key.study_id]
+            table.box_decisions.append(box_decision)
+            if box_decision.action in ("drop", "error"):
+                table.notes.append({"study_index": index, STUDY_ID: key.study_id, "note": "dropped_by_box_policy"})
+                return []
+            # box on the NATIVE grid (None = full_image fallback); the dataset maps it per mode
+            item.update({"box_action": box_decision.action, "box": box_decision.box,
+                         "box_source_shape": box_decision.source_shape})
+        return [item]
 
     # --------------------------------------------------------------- 2D from NIfTI
     def _slice_items(self, index: int, row: Any, fold: int | None, table: ItemTable) -> list[dict[str, Any]]:
@@ -212,11 +242,16 @@ def expected_channels(settings: ImagingSettings, manifest: pd.DataFrame | None =
         base = int(sum(read_image_file(p).shape[0] for p in rows["path"]))
     else:
         base = settings.base_channels()
-    return base + (1 if settings.mask_mode == "mask_channel" else 0)
+    return (base + (1 if settings.mask_mode == "mask_channel" else 0)
+            + (1 if settings.box_mode == "box_channel" else 0))
 
 
 class ImageDataset(Dataset):
-    """``(x [C, *S] float32, y long, study_index long)``; annotation erasing only when ``training``."""
+    """``(x [C, *S] float32, y long, study_index long)``; annotation erasing only when ``training``.
+
+    With ``box_mode=dual_stream`` ``x`` is a tuple ``(global [C, *target_size], local [C, *box_local_size])``
+    (the default collate turns it into a list of two batched tensors).
+    """
 
     def __init__(self, items: pd.DataFrame, settings: ImagingSettings, *, channels: int,
                  provider: MaskProvider | None = None, fold: int | None = None, training: bool = False,
@@ -244,8 +279,13 @@ class ImageDataset(Dataset):
             self.loader = None
         self._last: tuple[str, Any] | None = None   # one-study cache (items of a study are consecutive)
         self._native_loader: StudyVolumeLoader | None = None
-        if settings.image_source == "nifti" and settings.image_dim == "3d" and settings.mask_mode == "roi_crop":
-            if settings.use_annotation_boxes:
+        if settings.image_source == "nifti" and settings.image_dim == "3d" and settings.box_mode == "roi_crop" \
+                and settings.use_annotation_boxes:
+            raise ValueError("use_annotation_boxes cannot be combined with box_mode=roi_crop "
+                             "(the erased cuboid is defined on the full target grid)")
+        if settings.image_source == "nifti" and settings.image_dim == "3d" and (
+                settings.mask_mode == "roi_crop" or settings.box_mode in ("roi_crop", "dual_stream")):
+            if settings.use_annotation_boxes and settings.mask_mode == "roi_crop":
                 raise ValueError("use_annotation_boxes cannot be combined with 3D mask_mode=roi_crop "
                                  "(the erased cuboid is defined on the full target grid)")
             self._native_loader = StudyVolumeLoader(
@@ -275,7 +315,31 @@ class ImageDataset(Dataset):
             raise MaskPolicyError(f"mask disappeared for {key.as_tuple()}")
         return record
 
-    def load_item(self, index: int, log: list[dict[str, Any]] | None = None) -> np.ndarray:
+    def _box_input(self, item: Any, uids: Sequence[str], data: np.ndarray, study: str,
+                   log: list[dict[str, Any]] | None) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Dispatch to the ``box_mode`` builder (box on the native grid; ``None`` = full_image fallback)."""
+        box = item.get("box")
+        shape = item.get("box_source_shape")
+        if str(item.get("box_action", "")) != "use" or not isinstance(box, tuple):
+            box, shape = None, None
+        else:
+            box = (tuple(int(v) for v in box[0]), tuple(int(v) for v in box[1]))
+            shape = tuple(int(v) for v in shape)
+        if log is not None:
+            log.append({"op": "box_mode", "mode": self.s.box_mode, "fallback": box is None,
+                        "box": [list(box[0]), list(box[1])] if box else None,
+                        "source_shape": list(shape) if shape else None})
+
+        def native() -> np.ndarray:
+            if self._native_loader is None:
+                raise ValueError(f"box_mode={self.s.box_mode} does not use the native grid")
+            return self._native_volume(uids).data
+
+        ctx = BoxInput(target=data, native=native, box=box, source_shape=shape, study_id=study)
+        return build_box_input(ctx, self.s, log)
+
+    def load_item(self, index: int, log: list[dict[str, Any]] | None = None
+                  ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         item = self.items.iloc[index]
         s = self.s
         action = str(item["mask_action"])
@@ -310,7 +374,9 @@ class ImageDataset(Dataset):
                                 "origin": list(origin) if origin else None})
             key = ImageKey(item[PATIENT_ID], study, item[SERIES_ID], "")
             record = self._mask(key, action)
-            if s.mask_mode == "none":
+            if s.box_mode != "none":
+                out = self._box_input(item, uids, data, study, log)
+            elif s.mask_mode == "none":
                 out = data
             elif record is None:      # full_image fallback
                 out = apply_mask_mode(data, None, s.mask_mode, roi_classes=s.mask_roi_classes, margin=s.roi_margin,
@@ -347,12 +413,20 @@ class ImageDataset(Dataset):
                             "slice_affine": slice_affine(volume.affine, s.slice_axis, slice_index).tolist()})
             out = apply_mask_mode(image, mask, s.mask_mode, roi_classes=s.mask_roi_classes, margin=s.roi_margin,
                                   out_size=s.target_size_2d, log=log)
+        if isinstance(out, tuple):      # dual_stream: (global, local), same channels in both streams
+            for name, stream in zip(("global", "local"), out):
+                if stream.shape[0] != self.channels:
+                    raise ValueError(f"item {index} {name} stream has {stream.shape[0]} channels, expected "
+                                     f"{self.channels}")
+            return tuple(np.ascontiguousarray(stream, dtype=np.float32) for stream in out)  # type: ignore
         if out.shape[0] != self.channels:
             raise ValueError(f"item {index} has {out.shape[0]} channels, expected {self.channels}")
         return np.ascontiguousarray(out, dtype=np.float32)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = torch.from_numpy(self.load_item(index))
+    def __getitem__(self, index: int) -> tuple[Any, torch.Tensor, torch.Tensor]:
+        loaded = self.load_item(index)
+        x: Any = (tuple(torch.from_numpy(a) for a in loaded) if isinstance(loaded, tuple)
+                  else torch.from_numpy(loaded))
         y = torch.tensor(int(self.items.iloc[index][LABEL]), dtype=torch.long)
         return x, y, torch.tensor(int(self.items.iloc[index]["study_index"]), dtype=torch.long)
 

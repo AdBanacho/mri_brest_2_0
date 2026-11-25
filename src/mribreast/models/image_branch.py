@@ -6,10 +6,15 @@ checkpoint by study-level ROC-AUC on ``data.selection`` (``ModelCheckpoint`` on
 ``data.output_dir``::
 
     best.ckpt  last.ckpt  image_branch.json  history.csv  [annotation_coverage.csv] [mask_audit_fit.csv]
+    [box_audit.csv]
 
 predict_proba(frame) returns STUDY-level probabilities ``[len(frame), C]``
 row-aligned with ``frame``; studies whose images were all dropped by a mask
-policy get NaN rows (see ``last_audit``).
+(or box) policy get NaN rows (see ``last_audit``).
+
+``box_mode`` != none uses the Duke annotation box at fit, selection AND prediction: the predictor
+loads the boxes and computes coverage for every frame it predicts on (research setting; a box must
+exist for test studies too, recorded as ``box.requires_box_at_inference`` in ``image_branch.json``).
 """
 
 from __future__ import annotations
@@ -28,14 +33,21 @@ from mribreast import MANIFEST_SCHEMA_VERSION
 from mribreast.artifacts.core import read_json, write_json_atomic
 from mribreast.contracts import FoldData, MaskProvider
 from mribreast.imaging.annotations import annotation_coverage, load_annotation_boxes
+from mribreast.imaging.boxes import box_audit_frame, coverage_counts
 from mribreast.imaging.cache import CACHE_SCHEMA_VERSION
 from mribreast.imaging.datasets import (ImageDataset, ItemBuilder, ItemTable, aggregate_study_probs,
                                         expected_channels, load_manifest_for)
 from mribreast.imaging.masks.policies import audit_frame, summarize_mask_audit
 from mribreast.imaging.settings import ImagingSettings, settings_from_cfg
 from mribreast.imaging.volume import NORMALISATION_DIFFERENCE, NORMALISATION_PHASE, RESIZE_BACKEND
-from mribreast.models.classifier import ImageClassifier, compute_balanced_class_weights, trainer_options
-from mribreast.models.networks import make_network
+from mribreast.models.classifier import ImageClassifier, compute_balanced_class_weights, map_inputs, trainer_options
+from mribreast.models.dual_stream import DUAL_STREAM_DROPOUT
+from mribreast.models.networks import network_from_meta
+
+#: imaging keys that must match between a saved branch and the current configuration
+LOAD_CHECK_KEYS = ("image_dim", "image_source", "subtraction_mode", "phase_count", "target_size", "target_size_2d",
+                   "slice_axis", "slice_selection", "slices_per_study", "mask_mode", "mask_roi_classes",
+                   "box_mode", "box_margin", "box_local_size", "dual_stream_embed_dim")
 
 BRANCH_FILE = "image_branch.json"
 
@@ -59,7 +71,36 @@ def _channel_description(settings: ImagingSettings, channels: int) -> list[str]:
         names = [f"phase_{i}-phase_{i - 1}" for i in range(1, settings.phase_count)]
     if settings.mask_mode == "mask_channel":
         names.append("roi_mask")
+    if settings.box_mode == "box_channel":
+        names.append("annotation_box")
     return names
+
+
+def _network_meta(cfg: Mapping[str, Any], settings: ImagingSettings, spatial_dims: int, channels: int,
+                  num_classes: int) -> dict[str, Any]:
+    """``network`` section of ``image_branch.json``; ``network_from_meta`` rebuilds the module from it."""
+    meta: dict[str, Any] = {"name": str(cfg.get("mri_model", "densenet121")), "spatial_dims": spatial_dims,
+                            "in_channels": channels, "out_channels": num_classes,
+                            "extra": dict(cfg.get("mri_extra_json") or {})}
+    if settings.box_mode == "dual_stream":
+        meta["wrapper"] = "dual_stream"
+        meta["dual_stream"] = {"embed_dim": int(settings.dual_stream_embed_dim), "dropout": DUAL_STREAM_DROPOUT,
+                               "encoders": "independent (no weight sharing)",
+                               "head": "concat -> ReLU -> Dropout -> Linear",
+                               "global_input": [channels] + list(settings.target_size),
+                               "local_input": [channels] + list(settings.box_local_size)}
+    return meta
+
+
+def _input_shape(settings: ImagingSettings, channels: int) -> Any:
+    if settings.box_mode == "dual_stream":
+        return {"global": [channels] + list(settings.target_size),
+                "local": [channels] + list(settings.box_local_size)}
+    return [channels] + (list(settings.target_size) if settings.image_dim == "3d" else list(settings.target_size_2d))
+
+
+def _box_audit(table: ItemTable) -> pd.DataFrame:
+    return box_audit_frame(table.box_decisions)
 
 
 class _EpochSetter(pl.Callback):
@@ -79,7 +120,7 @@ class ImagePredictor:
 
     def __init__(self, network: torch.nn.Module, settings: ImagingSettings, *, num_classes: int, channels: int,
                  provider: MaskProvider | None, fold: int | None, meta: Mapping[str, Any], directory: Path,
-                 batch_size: int = 4, num_workers: int = 0):
+                 batch_size: int = 4, num_workers: int = 0, annotation_boxes: Mapping[str, Any] | None = None):
         self.network = network.eval()
         self.settings = settings
         self.num_classes = int(num_classes)
@@ -90,12 +131,21 @@ class ImagePredictor:
         self.directory = Path(directory)
         self.batch_size = int(batch_size)
         self.num_workers = int(num_workers)
+        # box_mode: patient -> box; coverage is computed for every predicted frame (never fit rows only)
+        self.annotation_boxes = annotation_boxes
+        if settings.uses_boxes and annotation_boxes is None:
+            raise ValueError("box_mode needs annotation boxes at inference")
         self.last_audit: pd.DataFrame = pd.DataFrame()
+        self.last_box_coverage: pd.DataFrame = pd.DataFrame()
 
     def item_probabilities(self, frame: pd.DataFrame) -> tuple[ItemTable, np.ndarray]:
         manifest = load_manifest_for(self.settings)
-        table = ItemBuilder(self.settings, self.provider, manifest).build(frame.reset_index(drop=True), self.fold)
-        self.last_audit = audit_frame(table.decisions)
+        table = ItemBuilder(self.settings, self.provider, manifest,
+                            annotation_boxes=self.annotation_boxes).build(frame.reset_index(drop=True), self.fold)
+        # box and mask modes are mutually exclusive: last_audit is the box audit in box modes
+        self.last_audit = _box_audit(table) if self.settings.uses_boxes else audit_frame(table.decisions)
+        if table.box_coverage is not None:
+            self.last_box_coverage = table.box_coverage
         if not len(table.items):
             return table, np.zeros((0, self.num_classes))
         dataset = ImageDataset(table.items, self.settings, channels=self.channels, provider=self.provider,
@@ -105,7 +155,8 @@ class ImagePredictor:
         with torch.no_grad():
             for x, _, _ in loader:
                 # float64 softmax: float32 saturates to exactly 1.0 and creates artificial ROC ties
-                outputs.append(torch.softmax(self.network(x.float()).double(), dim=1).cpu().numpy())
+                logits = self.network(map_inputs(x, lambda t: t.float()))
+                outputs.append(torch.softmax(logits.double(), dim=1).cpu().numpy())
         return table, np.concatenate(outputs, axis=0)
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
@@ -149,13 +200,22 @@ class ImageBranch:
         self.logs_dir = Path(logs_dir) if logs_dir else None
         if self.settings.uses_masks and self.mask_provider is None:
             raise ValueError("mask_mode / mask-based slice selection need a mask provider (also at inference)")
+        if self.settings.uses_boxes and not self.settings.annotation_boxes_file:
+            raise ValueError("box_mode requires annotation_boxes_file (boxes are used at training AND inference)")
         self.spatial_dims = self.settings.spatial_dims
+        self._box_cache: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ audits
     def _boxes(self) -> dict[str, Any]:
         if not self.settings.annotation_boxes_file:
-            raise ValueError("use_annotation_boxes requires annotation_boxes_file")
-        return load_annotation_boxes(self.settings.annotation_boxes_file)
+            raise ValueError("use_annotation_boxes / box_mode require annotation_boxes_file")
+        if self._box_cache is None:
+            self._box_cache = load_annotation_boxes(self.settings.annotation_boxes_file)
+        return self._box_cache
+
+    def _input_boxes(self) -> dict[str, Any] | None:
+        """Boxes as a model input (``box_mode``), else ``None``."""
+        return self._boxes() if self.settings.uses_boxes else None
 
     def annotation_map(self, frame: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFrame]:
         return annotation_coverage(frame, self._boxes(), self.settings.image_root)
@@ -166,6 +226,14 @@ class ImageBranch:
         frame = frame.reset_index(drop=True)
         if self.settings.use_annotation_boxes:
             out["annotation_coverage"] = self.annotation_map(frame)[1]
+        if self.settings.uses_boxes:
+            # audit-only: policy "error" is reported (action "error"), never raised
+            builder = ItemBuilder(self.settings, self.mask_provider, load_manifest_for(self.settings),
+                                  raise_errors=False, annotation_boxes=self._input_boxes())
+            table = builder.build(frame, None)
+            out["box_audit"] = _box_audit(table)
+            if table.box_coverage is not None:
+                out["box_coverage"] = table.box_coverage
         if self.settings.uses_masks:
             manifest = load_manifest_for(self.settings)
             # audit-only: policy "error" is reported (action "error"), never raised
@@ -189,9 +257,8 @@ class ImageBranch:
 
     # ------------------------------------------------------------------ fit
     def _network(self, channels: int) -> torch.nn.Module:
-        return make_network(str(self.cfg.get("mri_model", "densenet121")), spatial_dims=self.spatial_dims,
-                            in_channels=channels, num_classes=self.num_classes,
-                            extra=self.cfg.get("mri_extra_json") or {})
+        meta = _network_meta(self.cfg, self.settings, self.spatial_dims, channels, self.num_classes)
+        return network_from_meta(meta, num_classes=self.num_classes)
 
     def fit(self, data: FoldData) -> ImagePredictor:
         cfg, s = self.cfg, self.settings
@@ -200,7 +267,7 @@ class ImageBranch:
         output_dir.mkdir(parents=True, exist_ok=True)
         manifest = load_manifest_for(s)
         channels = expected_channels(s, manifest)
-        builder = ItemBuilder(s, self.mask_provider, manifest)
+        builder = ItemBuilder(s, self.mask_provider, manifest, annotation_boxes=self._input_boxes())
         fit_frame = data.fit.reset_index(drop=True)
         selection_frame = data.selection.reset_index(drop=True)
         fit_table = builder.build(fit_frame, data.fold)
@@ -221,6 +288,17 @@ class ImageBranch:
             audit = pd.concat([audit_frame(fit_table.decisions).assign(split="fit"),
                                audit_frame(selection_table.decisions).assign(split="selection")], ignore_index=True)
             audit.to_csv(output_dir / "mask_audit_fit.csv", index=False)
+        box_counts: dict[str, dict[str, int]] = {}
+        if s.uses_boxes:
+            # boxes are a model input: fit AND selection rows use them (as inference will)
+            box_audit = pd.concat([_box_audit(fit_table).assign(split="fit"),
+                                   _box_audit(selection_table).assign(split="selection")], ignore_index=True)
+            box_audit.to_csv(output_dir / "box_audit.csv", index=False)
+            for split, table in (("fit", fit_table), ("selection", selection_table)):
+                frame_audit = _box_audit(table)
+                box_counts[split] = {
+                    **{f"status_{k}": int(v) for k, v in frame_audit["status"].value_counts().items()},
+                    **{f"action_{k}": int(v) for k, v in frame_audit["action"].value_counts().items()}}
 
         train_ds = ImageDataset(fit_table.items, s, channels=channels, provider=self.mask_provider, fold=data.fold,
                                 training=True, annotation_boxes=matched, seed=int(data.seed), manifest=manifest)
@@ -280,18 +358,17 @@ class ImageBranch:
             finite = history.dropna(subset=["val_auc_roc"])
             if len(finite):
                 best_epoch = int(finite.loc[finite["val_auc_roc"].idxmax(), "epoch"])
+        provider_info = self.mask_provider.describe() if self.mask_provider is not None else None
         meta = {
             "schema_version": MANIFEST_SCHEMA_VERSION, "branch": "image", "fold": int(data.fold),
             "num_classes": self.num_classes,
-            "network": {"name": str(cfg.get("mri_model", "densenet121")), "spatial_dims": self.spatial_dims,
-                        "in_channels": channels, "out_channels": self.num_classes,
-                        "extra": dict(cfg.get("mri_extra_json") or {})},
+            "network": _network_meta(cfg, s, self.spatial_dims, channels, self.num_classes),
             "imaging": s.to_json(),
             "channels": _channel_description(s, channels),
             "geometry": {
                 "axis_order": "nibabel voxel axes (i, j, k); no reorientation" if s.image_source == "nifti"
                 else "image rows, columns",
-                "input_shape": [channels] + (list(s.target_size) if s.image_dim == "3d" else list(s.target_size_2d)),
+                "input_shape": _input_shape(s, channels),
                 "slice_axis": s.slice_axis if s.image_dim == "2d" and s.image_source == "nifti" else None,
                 "spacing_units": "mm (from NIfTI affine)" if s.image_source == "nifti" else "pixels",
             },
@@ -303,9 +380,19 @@ class ImageBranch:
                      "roi_margin": s.roi_margin, "missing_policy": s.mask_missing_policy,
                      "empty_policy": s.mask_empty_policy, "invalid_policy": s.mask_invalid_policy,
                      "provenance": s.mask_provenance,
-                     "provider": self.mask_provider.describe() if self.mask_provider is not None else None},
+                     "provider": provider_info,
+                     # masks from a box-prompted segmenter exist only where a Duke box exists (docs/segmentation-mri-core.md)
+                     "requires_box_at_inference": bool(s.uses_masks and provider_info
+                                                       and provider_info.get("requires_box_at_inference"))},
             "annotation_boxes": {"enabled": s.use_annotation_boxes, "eligible_fit_studies": len(matched),
                                  "coverage": coverage_summary, "applies_to": "fit rows only"},
+            "box": {"mode": s.box_mode, "margin": s.box_margin, "local_size": list(s.box_local_size),
+                    "missing_policy": s.box_missing_policy, "dual_stream_embed_dim": s.dual_stream_embed_dim,
+                    "requires_box_at_inference": s.uses_boxes,
+                    "applies_to": "fit, selection and prediction rows" if s.uses_boxes else "unused",
+                    "axis_convention": "half-open (column, row, slice) on the native loaded-array grid; "
+                                       "unverified against real overlays",
+                    "coverage": box_counts},
             "training": {"epochs": int(cfg.get("epoch", 30)), "batch_size": batch_size,
                          "lr": float(cfg.get("lr", 1e-4)), "optimizer": module.optimizer_name,
                          "weight_decay": module.weight_decay, "scheduler": module.scheduler_name,
@@ -340,20 +427,22 @@ class ImageBranch:
                              f"{self.num_classes}")
         saved = meta["imaging"]
         current = self.settings.to_json()
-        for key in ("image_dim", "image_source", "subtraction_mode", "phase_count", "target_size", "target_size_2d",
-                    "slice_axis", "slice_selection", "slices_per_study", "mask_mode", "mask_roi_classes"):
-            if saved.get(key) != current.get(key):
-                raise ValueError(f"saved image branch was trained with {key}={saved.get(key)!r}, current "
-                                 f"configuration has {current.get(key)!r}")
-        network = make_network(network_meta["name"], spatial_dims=int(network_meta["spatial_dims"]),
-                               in_channels=int(network_meta["in_channels"]), num_classes=self.num_classes,
-                               extra=network_meta.get("extra") or {})
+        defaults = ImagingSettings().to_json()   # branches saved before a key existed used its default
+        for key in LOAD_CHECK_KEYS:
+            if saved.get(key, defaults.get(key)) != current.get(key):
+                raise ValueError(f"saved image branch was trained with {key}={saved.get(key, defaults.get(key))!r}, "
+                                 f"current configuration has {current.get(key)!r}")
+        expects_dual = self.settings.box_mode == "dual_stream"
+        if (network_meta.get("wrapper") == "dual_stream") != expects_dual:
+            raise ValueError(f"saved image network wrapper {network_meta.get('wrapper')!r} does not match "
+                             f"box_mode={self.settings.box_mode!r}")
+        network = network_from_meta(network_meta, num_classes=self.num_classes)
         network.load_state_dict(_load_state_dict(directory / "best.ckpt"))
         workers = int(self.cfg.get("validate_num_workers", self.cfg.get("num_workers", 0)))
         return ImagePredictor(network, self.settings, num_classes=self.num_classes,
                               channels=int(network_meta["in_channels"]), provider=self.mask_provider, fold=fold,
                               meta=meta, directory=directory, batch_size=int(self.cfg.get("batch_size", 4)),
-                              num_workers=workers)
+                              num_workers=workers, annotation_boxes=self._input_boxes())
 
 
 def build_image_branch(cfg: Mapping[str, Any], *, num_classes: int, mask_provider: MaskProvider | None = None,

@@ -174,3 +174,32 @@ def import_legacy(module: str):
             except ImportError as exc:  # pragma: no cover - missing legacy deps
                 pytest.skip(f"legacy module {module} not importable: {exc}")
     pytest.skip("legacy reference repository not available (set MRI_BREAST_LEGACY_REPO)")
+
+
+class FakeSliceSegmenter:
+    """Box-prompted ``SliceSegmenter`` stand-in: positive logits where the window is bright AND inside the
+    prompt box, so a wrongly mapped box gives a wrong mask (docs/segmentation-mri-core.md)."""
+
+    model_id = "fake"
+    model_version = "v1"
+
+    def __init__(self, level: float = 0.5):
+        self.level = level
+        self.calls: list[tuple[tuple[int, int], tuple[float, ...]]] = []
+
+    def describe(self) -> dict[str, Any]:
+        return {"model_id": self.model_id, "model_version": self.model_version, "level": self.level}
+
+    def segment(self, windows, boxes):
+        import numpy as np
+
+        from mribreast.prepare.segmentation.mri_core import SliceResult
+
+        out = []
+        for window, (x0, y0, x1, y1) in zip(windows, boxes):
+            assert window.dtype == np.float32 and 0.0 <= window.min() and window.max() <= 1.0
+            self.calls.append((window.shape, (x0, y0, x1, y1)))
+            inside = np.zeros(window.shape, dtype=bool)
+            inside[int(np.floor(y0)):int(np.ceil(y1)), int(np.floor(x0)):int(np.ceil(x1))] = True
+            out.append(SliceResult(np.where(inside, (window - self.level) * 20.0, -20.0).astype(np.float32), 0.9))
+        return out

@@ -90,6 +90,14 @@ check_invalid train 'needs PATHS[density_file]' "TRAIN_GRID[feature_groups]='cli
 check_invalid train 'feature_selector requires the tabular branch' 'TRAIN[branches]=image'
 check_invalid train 'positive_class=2 outside' 'TRAIN[positive_class]=2'
 check_invalid train 'use branches=image' 'TRAIN[selection_split]=outer'
+check_invalid train 'box_mode=roi_crop' 'TRAIN[box_mode]=roi_crop'
+check_invalid train 'mutually exclusive' 'TRAIN[profile]=general' 'TRAIN[mask_provider]=synthetic' 'TRAIN[mask_mode]=mask_channel' 'TRAIN[box_mode]=box_channel'
+check_invalid train 'box_mode requires image_dim=3d' 'TRAIN[profile]=general' 'TRAIN[image_dim]=2d' 'TRAIN[use_annotation_boxes]=false' 'TRAIN[box_mode]=dual_stream'
+check_invalid train 'box_local_size needs three' "TRAIN[box_local_size]='8 8'"
+check_invalid train 'box_margin' 'TRAIN[box_margin]=3'
+check_invalid train 'dual_stream_embed_dim' 'TRAIN[dual_stream_embed_dim]=0'
+BOXES=$(with_settings boxes 'TRAIN[box_mode]=dual_stream')
+bash "$CONTROLLER" --train --config "$BOXES" --dry-run > /dev/null   # erasing + dual_stream is allowed
 THREE=$(with_settings three 'TRAIN[label_scheme]=oncotype_3class_18_31')
 bash "$CONTROLLER" --train --config "$THREE" --dry-run > /dev/null   # training is fine
 expect_fail_msg 'binary-only' bash "$CONTROLLER" --validate --config "$THREE" --dry-run

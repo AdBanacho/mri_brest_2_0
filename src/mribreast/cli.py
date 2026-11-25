@@ -55,7 +55,7 @@ def required_inputs(cfg: Mapping[str, Any]) -> list[str]:
         keys += ["clinical_features_file", "metadata_file"]
     if "image" in branches:
         keys.append("image_root" if cfg["image_source"] == "nifti" else "image_manifest_file")
-        if cfg["use_annotation_boxes"]:
+        if cfg["use_annotation_boxes"] or cfg.get("box_mode", "none") != "none":
             keys.append("annotation_boxes_file")
         if cfg["mask_provider"] == "local_files":
             keys.append("mask_manifest_file")

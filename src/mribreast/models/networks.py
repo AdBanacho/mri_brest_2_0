@@ -64,3 +64,19 @@ def make_network(model_name: str, *, spatial_dims: int, in_channels: int, num_cl
         constructor = resnet10 if model_name == "resnet10" else resnet18
         return constructor(spatial_dims=spatial_dims, n_input_channels=in_channels, num_classes=num_classes, **extra)
     raise ValueError(f"unknown MRI model {model_name!r}; expected one of {MRI_MODELS}")
+
+
+def network_from_meta(network: Mapping[str, Any], *, num_classes: int) -> nn.Module:
+    """Rebuild a network from the ``network`` section of ``image_branch.json`` (plain or ``dual_stream`` wrapper)."""
+    wrapper = network.get("wrapper") or None
+    common = dict(spatial_dims=int(network["spatial_dims"]), in_channels=int(network["in_channels"]),
+                  num_classes=int(num_classes))
+    if wrapper is None:
+        return make_network(str(network["name"]), extra=network.get("extra") or {}, **common)
+    if wrapper == "dual_stream":
+        from mribreast.models.dual_stream import DualStreamNetwork
+
+        dual = network["dual_stream"]
+        return DualStreamNetwork(str(network["name"]), embed_dim=int(dual["embed_dim"]),
+                                 dropout=float(dual["dropout"]), extra=network.get("extra") or {}, **common)
+    raise ValueError(f"unknown network wrapper {wrapper!r}")

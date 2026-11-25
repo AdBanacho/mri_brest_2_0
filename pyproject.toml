@@ -32,6 +32,9 @@ dependencies = [
 [project.optional-dependencies]
 # Separate, explicit data-preparation stage (network + DICOM). Never imported by train/validate.
 prepare = ["requests>=2.31", "pydicom>=2.4", "SimpleITK>=2.3", "synapseclient>=4.0"]
+# Box-prompted lesion segmentation with MRI-CORE/SAM (prepare-data segment-mri-core). Never imported by
+# train/validate. torchvision must match the installed torch (on Helios: pip-constrained to ML-bundle's torch).
+segment = ["einops>=0.7", "torchvision>=0.16"]
 tensorboard = ["tensorboard>=2.14"]
 test = ["pytest>=7.4"]
 

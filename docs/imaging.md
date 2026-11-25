@@ -80,6 +80,47 @@ map to array axes `(0, 1, 2)`; stored half-open as `((c0,r0,s0),(c1+1,r1+1,s1+1)
   overlays (no reference series in this environment). Until verified, treat
   results with boxes as provisional; shape/affine checks cannot prove it.
 
+## 4b. Annotation boxes as a model input (`box_mode`)
+
+New (not in legacy). In these modes the Duke box is part of the model input, so it is needed at
+**training and at inference**: for fit, selection, calibration, validation and prediction frames. That is
+a research setting. Deployment would need a radiologist box or a lesion detector for every test study.
+`image_branch.json` records it as `box.requires_box_at_inference: true`.
+
+| `box_mode` | Input | Network |
+|---|---|---|
+| `none` | unchanged | `mri_model` |
+| `roi_crop` | box ± `box_margin` cropped on the **native** grid, resized to `target_size`; the only image | `mri_model` |
+| `box_channel` | full volume at `target_size` + one binary channel = box mapped with `resize_box` (outward rounding, no lesion voxel lost) | `mri_model`, `in_channels + 1` |
+| `dual_stream` | global = full volume at `target_size`; local = box ± `box_margin` cropped on the native grid, resized to `box_local_size` | `DualStreamNetwork`: two independent `mri_model` encoders (output `dual_stream_embed_dim`), concat → ReLU → Dropout(0.2) → Linear |
+
+Fields: `box_mode`, `box_margin` (fraction of box extent per side, `ceil`, clipped to the
+volume, [0, 2], default 0.1; same rule as mask `roi_margin`), `box_local_size` (default `64 64 32`),
+`dual_stream_embed_dim` (default 128), `box_missing_policy`.
+
+* Code: `imaging/boxes/` (`policies.py` decisions + audit, `common.py` `BoxInput`/`expand_box`,
+  `roi_crop.py`, `channel.py`, `dual.py`), `models/dual_stream.py`.
+* **Missing box** = any `annotation_coverage` status other than `eligible`. `box_missing_policy`:
+  `error` (default) fails; `full_image` keeps the study (`roi_crop` → full volume, `box_channel` →
+  all-zero channel, `dual_stream` → local = full native volume resized); `drop` gives the study no
+  items, so prediction returns a NaN row (same as mask `drop`). Decisions are written to
+  `box_audit.csv` (`split` = fit/selection) and to `last_audit` at prediction.
+* Rules: 3D NIfTI + image branch + `annotation_boxes_file` required; mutually exclusive with
+  `mask_mode` and mask-based slice selection (one lesion-location source). `use_annotation_boxes`
+  (erasing) is allowed with `box_channel` and `dual_stream` (only the global volume is erased; the
+  local crop comes from the unerased native volume) and rejected with `roi_crop`.
+* Native grid = the first series' loaded array without resize. A box whose `source_shape`
+  differs from the loaded native volume raises instead of being silently mis-placed.
+* `roi_crop` and `dual_stream` resize the crop to a fixed size, so the aspect ratio is not preserved
+  (same as mask `roi_crop`).
+* `load()` refuses a saved branch whose `box_mode`, `box_margin`, `box_local_size` or
+  `dual_stream_embed_dim` differs from the current config.
+* **Risk:** the open axis-convention assumption of §4 matters more here than for erasing. A wrong
+  mapping makes erasing hit some other background region, but it makes these modes crop or mark
+  the wrong region at training and inference. Verify overlays on real data before trusting results.
+* Smoke configs: `configs/synthetic_cpu_3d_box_{roi_crop,box_channel,dual_stream}.conf`
+  (parametrised into `tests/e2e/test_modes_smoke.py`).
+
 ## 5. 2D contract
 
 * **Ready images** (`image_source=manifest_2d`): CSV `patient_id, study_id,
@@ -120,6 +161,13 @@ volume. Providers (`contracts.MaskProvider`):
 * Manual masks, predicted masks and 3D annotation boxes are separate sources:
   `mask_kind` must match the record `source` (`synthetic` accepted), boxes never
   enter the mask path.
+* Optional manifest column `prompt_source` (read-time default `""`, written only by tools that use it,
+  so older manifests and their fingerprints are unchanged). `annotation_box` marks masks from a
+  segmenter prompted with the Duke boxes (`prepare-data segment-mri-core`,
+  `docs/segmentation-mri-core.md`). Such masks exist only where a box exists. `MaskRecord.prompt_source`
+  is copied into `mask_audit*.csv`, `describe()` reports `prompt_sources` and
+  `requires_box_at_inference` plus a limitation, and `image_branch.json` sets
+  `mask.requires_box_at_inference` when the branch uses masks.
 
 Modes: `none`, `roi_crop` (bbox of `mask_roi_classes` ± `roi_margin` × extent per
 side, joint crop then joint resize), `mask_channel` (binary ROI appended), and

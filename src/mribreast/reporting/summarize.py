@@ -37,7 +37,8 @@ RANKING_COLUMNS = tuple(f"primary_{m}_mean" for m in RANKING_METRICS)
 CONFIG_COLUMNS = ("mri_model", "subtraction_mode", "feature_groups", "feature_model", "feature_selector", "batch_size",
                   "positive_boost", "sensitivity_lambda", "lr", "fusion_alpha")
 NEW_CONFIG_COLUMNS = ("train_id", "eval_id", "profile", "label_scheme", "branches", "selection_split", "primary_branch",
-                      "report_unit", "threshold_strategy", "image_dim", "mask_mode", "selection_uses_outer_eval")
+                      "report_unit", "threshold_strategy", "image_dim", "mask_mode", "box_mode",
+                      "selection_uses_outer_eval")
 
 
 def _json_value(value: Any) -> Any:

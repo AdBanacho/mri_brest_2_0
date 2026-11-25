@@ -116,6 +116,7 @@ class MaskRecord:
     grid_source: str = ""              # e.g. series uid the mask grid was defined on
     training_provenance: str = "unknown"  # unknown | frozen_external | fold_trained:<fold>
     known_overlap: str = ""            # free text: known overlap of segmenter training data with this cohort
+    prompt_source: str = ""            # what prompted the segmenter, e.g. "annotation_box" (then a box is needed at inference)
 
 
 @runtime_checkable

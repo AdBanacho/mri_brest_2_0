@@ -277,8 +277,26 @@ def validate_combinations(cfg: Mapping[str, Any], stage: str) -> None:
                 bad("mask_provenance=fold_trained only applies to mask_kind=predicted")
         if not 0.0 <= cfg["roi_margin"] <= 2.0:
             bad("roi_margin must be in [0, 2]")
+        if not 0.0 <= cfg["box_margin"] <= 2.0:
+            bad("box_margin must be in [0, 2]")
+        if len(cfg["box_local_size"]) != 3:
+            bad("box_local_size needs three positive integers")
+        if cfg["dual_stream_embed_dim"] < 1:
+            bad("dual_stream_embed_dim must be >= 1")
+        if cfg["box_mode"] != "none":
+            # boxes are a research input: a radiologist box (or a future detector) is needed at inference too
+            if cfg["image_dim"] != "3d" or cfg["image_source"] != "nifti":
+                bad("box_mode requires image_dim=3d and image_source=nifti")
+            if not cfg.get("annotation_boxes_file"):
+                bad("box_mode requires annotation_boxes_file (boxes are used at training AND inference)")
+            if cfg["mask_mode"] != "none" or cfg["slice_selection"] in ("mask_max_area", "mask_all"):
+                bad("box_mode and mask_mode / mask-based slice selection are mutually exclusive "
+                    "(one source of lesion location)")
+            if cfg["box_mode"] == "roi_crop" and cfg["use_annotation_boxes"]:
+                bad("use_annotation_boxes cannot be combined with box_mode=roi_crop "
+                    "(the erased cuboid is defined on the full target grid)")
     else:
-        if cfg["use_annotation_boxes"] or cfg["mask_mode"] != "none":
+        if cfg["use_annotation_boxes"] or cfg["mask_mode"] != "none" or cfg["box_mode"] != "none":
             bad("annotation boxes / masks need the image branch")
     if cfg["selection_split"] == "outer" and "tabular" in branches and cfg["profile"] != "duke_legacy_3d":
         bad("selection_split=outer (historical image-only) is only available in the legacy profile")
@@ -320,10 +338,15 @@ def _digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+BOX_IDENTITY_FIELDS = ("box_mode", "box_margin", "box_local_size", "dual_stream_embed_dim", "box_missing_policy")
+
+
 def train_identity(cfg: Mapping[str, Any], input_fingerprints: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Values that define a training run.  Paths enter via content fingerprints when given."""
     ident: dict[str, Any] = {"config_schema_version": CONFIG_SCHEMA_VERSION}
     for f in FIELDS.values():
+        if f.key in BOX_IDENTITY_FIELDS and cfg.get("box_mode", "none") == "none":
+            continue   # box fields only enter the identity when used, so train_ids from before them are unchanged
         if f.section == "train" and f.identity:
             ident[f.key] = format_value(f, cfg[f.key])
         elif f.section == "path" and f.identity:

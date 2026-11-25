@@ -179,7 +179,7 @@ another output root. Checks use POSIX paths (also on Git Bash). `--dry-run` prin
 git clone <repo> mri_brest_2_0 && cd mri_brest_2_0
 mkdir -p data/duke && ln -s /path/to/Clinical_and_Other_Features.xlsx /path/to/Imaging_Features.xlsx \
   /path/to/Annotation_Boxes.xlsx /path/to/Duke-Breast-Cancer-MRI_v2_20220609-nbia-digest.xlsx data/duke/
-ln -s /net/storage/.../tciaNifti data/duke/nifti        # <SeriesInstanceUID>.nii.gz files
+# image_root already points at the legacy tciaNifti (<SeriesInstanceUID>.nii.gz files)
 cp experiment.conf smoke.conf
 cat >> smoke.conf <<'EOF'
 MAX_JOBS=1
@@ -222,6 +222,33 @@ bash run_experiment.sh --summarize --dependency afterok:$V
 Use `afterany` instead of `afterok` if a single failed array task should not
 block validation of the others. Three alphas: `VALIDATE_GRID[fusion_alpha]='0.25|0.5|0.75'`
 → 72 validation tasks, no retraining.
+
+## Lesion segmentation (MRI-CORE, box-prompted; job script checked with fake Slurm and a local CPU run, not yet on Helios)
+
+A one-off preparation job, not a controller stage (`docs/segmentation-mri-core.md`). Its output is the
+`PATHS[mask_manifest_file]` of `configs/duke_2d_mri_core_mask.conf`. `segment_mri_core.slurm` reads
+that config (paths, `MODULES`, `PYTHON_*`, `JOB_TRAIN` account/partition, cohort keys from `TRAIN`),
+checks every input on the login node, and submits itself as one GPU job. On the GH200 node it builds or
+reuses `$PYTHON_VENV_ROOT/<arch>/segment-<hash>/`: the config's `PYTHON_PACKAGES` plus `einops` and
+`torchvision`, with the module's NumPy/PyTorch as pip constraints, so pip picks the `torchvision` release
+that matches the module torch. If no wheel matches (a non-PyPI torch build), add the cluster's
+torchvision module to `MODULES`. Compute nodes must be able to read the `mri_foundation` checkout and
+its git-ignored `pretrained_weights/{mri_foundation,sam_vit_b_01ec64}.pth` (copy them, about 0.8 GB).
+
+```bash
+git clone https://github.com/mazurowski-lab/mri_foundation.git ../mri_foundation   # default location
+scp mri_foundation.pth sam_vit_b_01ec64.pth helios:<project>/../mri_foundation/pretrained_weights/
+bash segment_mri_core.slurm --dry-run                       # checks inputs, prints sbatch + command
+bash segment_mri_core.slurm -- --limit 5 --previews 5       # smoke run
+bash segment_mri_core.slurm                                 # full cohort (default --previews 50)
+```
+
+Options: `--config FILE`, `--mri-foundation DIR` (or `MRI_FOUNDATION_REPO`), `--output-dir DIR`,
+`--time`, `--local`. Arguments after `--` go to `segment-mri-core` and override the defaults
+(`--weights mri_core --device cuda --batch_size 16 --previews 50`). The log is
+`<output_dir>/slurm-<jobid>.out`. Inspect `previews/*.png` after the smoke run (this also checks the box
+axis convention). The job is resumable: resubmitting it skips finished studies with the same settings.
+Exit code 1 = some studies failed (listed in `segmentation_qc.csv`).
 
 ## Local CPU runs (synthetic data)
 

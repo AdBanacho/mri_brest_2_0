@@ -31,7 +31,7 @@ from mribreast.imaging.volume import resize
 MASK_MODES = ("none", "roi_crop", "mask_channel", "foreground_only")
 MASK_POLICIES = ("error", "full_image", "drop")
 AUDIT_COLUMNS = ("patient_id", "study_id", "series_id", "slice_id", "purpose", "status", "action", "source",
-                 "model_id", "model_version", "training_provenance", "fingerprint", "detail")
+                 "model_id", "model_version", "training_provenance", "fingerprint", "detail", "prompt_source")
 
 
 class MaskPolicyError(ValueError):
@@ -54,7 +54,8 @@ class MaskDecision:
                 "source": rec.source if rec else "", "model_id": rec.model_id if rec else "",
                 "model_version": rec.model_version if rec else "",
                 "training_provenance": rec.training_provenance if rec else "",
-                "fingerprint": rec.fingerprint if rec else "", "detail": self.detail}
+                "fingerprint": rec.fingerprint if rec else "", "detail": self.detail,
+                "prompt_source": rec.prompt_source if rec else ""}
 
 
 def _apply_policy(decision: MaskDecision, policy: str, raise_errors: bool = True) -> MaskDecision:

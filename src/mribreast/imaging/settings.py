@@ -40,6 +40,12 @@ class ImagingSettings:
     mask_invalid_policy: str = "error"   # no config field yet (requested)
     mask_provenance: str = "unknown"
     positive_class: int = 1
+    # Duke annotation boxes as a classifier input (3D NIfTI; used at training AND inference)
+    box_mode: str = "none"                # none | roi_crop | box_channel | dual_stream
+    box_margin: float = 0.1
+    box_local_size: tuple[int, ...] = (64, 64, 32)
+    dual_stream_embed_dim: int = 128
+    box_missing_policy: str = "error"     # error | full_image | drop
 
     @property
     def spatial_dims(self) -> int:
@@ -48,6 +54,11 @@ class ImagingSettings:
     @property
     def uses_masks(self) -> bool:
         return self.mask_mode != "none" or self.slice_selection in ("mask_max_area", "mask_all")
+
+    @property
+    def uses_boxes(self) -> bool:
+        """Annotation boxes are a model input (training, selection and inference)."""
+        return self.box_mode != "none"
 
     def base_channels(self) -> int:
         """Channels from NIfTI phases (manifest_2d channels come from the images)."""
@@ -86,4 +97,9 @@ def settings_from_cfg(cfg: Mapping[str, Any]) -> ImagingSettings:
         mask_invalid_policy=str(cfg.get("mask_invalid_policy", "error")),
         mask_provenance=str(cfg.get("mask_provenance", "unknown")),
         positive_class=int(cfg.get("positive_class", 1)),
+        box_mode=str(cfg.get("box_mode", "none")),
+        box_margin=float(cfg.get("box_margin", 0.1)),
+        box_local_size=tuple(int(v) for v in cfg.get("box_local_size", (64, 64, 32))),
+        dual_stream_embed_dim=int(cfg.get("dual_stream_embed_dim", 128)),
+        box_missing_policy=str(cfg.get("box_missing_policy", "error")),
     )
