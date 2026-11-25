@@ -9,7 +9,7 @@
     "entryPoints": [
       { "command": "bash run_experiment.sh --train|--validate|--summarize|--prepare [--local] [--config FILE]", "file": "run_experiment.sh -> run_experiment.slurm", "role": "Bash controller (Slurm arrays, or --local on this machine)" },
       { "command": "python -m mribreast {prepare,train,validate,summarize,make-synthetic,import-legacy,prepare-data,fields} --<key> <value>", "file": "src/mribreast/cli.py", "role": "Python composition root; the only place that builds concrete sources, mask providers and branch trainers" },
-      { "command": "python -m mribreast prepare-data {nbia-download,dicom-to-nifti,nifti-info,mama-mia-download,mama-mia-map,segment-mri-core}", "file": "src/mribreast/prepare/cli.py", "role": "Separate data-preparation tools with their own optional dependencies (.[prepare], .[segment])" },
+      { "command": "python -m mribreast prepare-data {nbia-download,dicom-to-nifti,nifti-info,mama-mia-download,mama-mia-map,segment-mri-core,mricore-embed}", "file": "src/mribreast/prepare/cli.py", "role": "Separate data-preparation tools with their own optional dependencies (.[prepare], .[segment])" },
       { "command": "experiment.conf, configs/*.conf", "file": "experiment.conf", "role": "Bash-readable configuration: PATHS, TRAIN, TRAIN_GRID, VALIDATE, VALIDATE_GRID, SUMMARIZE" },
       { "command": "src/mribreast/config/fields.tsv", "file": "src/mribreast/config/fields.tsv", "role": "Single field registry read by both Bash and Python (key, section, type, default, choices, identity)" }
     ],
@@ -169,6 +169,53 @@
       "uncertain": [
         "Not verified on any real Duke slice: mask quality and the box axis convention of the prompts are unchecked (docs/acceptance.md §4b).",
         "Zero-shot quality measured on toy 2D images only; MRI-CORE pretraining overlap with Duke unknown."
+      ]
+    },
+    {
+      "id": "mricore_embed",
+      "name": "MRI-CORE embeddings",
+      "lane": "prep", "col": 0, "row": 4, "kind": "optional",
+      "command": "python -m mribreast.prepare mricore-embed --clinical_features_file ... --metadata_file ... --annotation_boxes_file ... --image_root ... --mricore_repo ... --checkpoint ... --output ...   (Helios: sbatch run_mricore_embed.slurm)",
+      "summary": "Runs a frozen, pretrained MRI foundation model (MRI-CORE) over the slices inside each radiologist's lesion box and turns them into a list of numbers (an embedding) per study. These numbers can then be used by the tabular model as an extra feature group, next to the clinical data.",
+      "purpose": "Frozen-encoder study embeddings -> CSV for feature group mricore (PATHS[mricore_features_file]).",
+      "inputs": [
+        { "name": "Cohort", "description": "built from clinical + metadata tables (same DukeCohortSource as training, --profile)" },
+        { "name": "Annotation_Boxes.xlsx", "description": "Duke lesion boxes; needed for --pool roi / both" },
+        { "name": "NIfTI volumes", "description": "image_root (read only; the output may not be inside it)" },
+        { "name": "mri_foundation checkout + MRI_CORE_vitb.pth", "description": "external, read-only (--mricore_repo, --checkpoint)" }
+      ],
+      "outputs": [
+        { "name": "<output>.csv", "description": "patient_id, study_id, series_uid, phase, n_slices + mricore_<pool>_<k> (768 per pool)" },
+        { "name": "<stem>_audit.csv", "description": "one row per cohort study with status / detail" },
+        { "name": "<stem>_provenance.json", "description": "checkpoint sha256, MRI-CORE git commit, arguments, weight-loading check, counts" }
+      ],
+      "parameters": [
+        { "key": "--phase", "default": "1", "note": "index into the study's ordered series (0 = pre, 1 = first post-contrast)" },
+        { "key": "--subtract_phase", "default": "none", "note": "e.g. 0 for post minus pre" },
+        { "key": "--pool", "default": "roi", "note": "roi | global | both" },
+        { "key": "--layer", "default": "blocks", "note": "blocks (final backbone LayerNorm) | neck" },
+        { "key": "--image_size", "default": "1024" },
+        { "key": "--max_slices", "default": "16", "note": "box slices evenly thinned to this many" },
+        { "key": "--roi_margin", "default": "0.1", "note": "box widening per side for roi pooling" }
+      ],
+      "libraries": ["torch", "nibabel", "pandas", "mri_foundation (external)"],
+      "source": [
+        { "file": "src/mribreast/prepare/mricore_embed.py", "symbol": "run", "line": 288 },
+        { "file": "src/mribreast/prepare/mricore_embed.py", "symbol": "study_embedding", "line": 233 },
+        { "file": "src/mribreast/prepare/mricore_embed.py", "symbol": "map_backbone_state / load_encoder", "line": 122 },
+        { "file": "src/mribreast/data/mricore.py", "symbol": "merge_mricore", "line": 56 },
+        { "file": "run_mricore_embed.slurm", "symbol": "Helios GPU job (GH200)" }
+      ],
+      "details": [
+        "Per volume: clip to [0.5, 99.5] percentiles, scale to [0, 1]; per slice: resize to --image_size, 3 channels, ImageNet normalisation (MRI-CORE normalize_type=ours).",
+        "Frozen ViT-B image encoder, no adapters, weights loaded strictly; 768-d patch tokens average-pooled over the box (roi) and/or the whole slice (global), then averaged over slices.",
+        "Label-free and applied to each study independently, so the features carry no fold information and are computed once for the whole cohort.",
+        "Studies without a row (no NIfTI, or no box with --pool roi) get NaN and are imputed fold-locally like any predictor; predictor policy allows the mricore_ prefix."
+      ],
+      "example": "PLACEHOLDER: PLACEHOLDER-P001, PLACEHOLDER-STUDY-001, mricore_roi_000=PLACEHOLDER ... mricore_roi_767=PLACEHOLDER",
+      "uncertain": [
+        "Not yet run on real Duke data; the embeddings' predictive value for the Oncotype label is unknown.",
+        "MRI-CORE pretraining overlap with Duke unknown."
       ]
     },
     {
@@ -333,13 +380,14 @@
         { "name": "Cohort frame", "description": "from the previous stage" },
         { "name": "Imaging_Features.xlsx", "description": "kinetic / morphology / heterogeneity groups (optional)" },
         { "name": "Density workbook", "description": "radiologist density (optional group)" },
+        { "name": "MRI-CORE embeddings CSV", "description": "mricore_features_file from mricore-embed (optional group mricore)" },
         { "name": "allowed_predictors_v1.json", "description": "packaged predictor policy" }
       ],
       "outputs": [
         { "name": "Cohort frame + predictor columns", "description": "continuous_columns and categorical_columns lists" }
       ],
       "parameters": [
-        { "key": "feature_groups", "default": "clinical", "note": "clinical|kinetic|morphology|heterogeneity|density" },
+        { "key": "feature_groups", "default": "clinical", "note": "clinical|kinetic|morphology|heterogeneity|density|mricore" },
         { "key": "include_sensitive", "default": "false", "note": "race_ethnicity excluded by default" },
         { "key": "imaging_patient_id_column", "default": "Patient ID" },
         { "key": "allow_missing_imaging_features", "default": "false" }
@@ -765,6 +813,8 @@
     { "from": "dicom_to_nifti", "to": "segment_mri_core", "label": "NIfTI volumes", "kind": "optional" },
     { "from": "dicom_to_nifti", "to": "controller", "label": "image_root (NIfTI)", "kind": "optional" },
     { "from": "segment_mri_core", "to": "controller", "label": "mask_manifest.csv", "kind": "optional" },
+    { "from": "dicom_to_nifti", "to": "mricore_embed", "label": "NIfTI volumes", "kind": "optional" },
+    { "from": "mricore_embed", "to": "tabular_features", "label": "mricore_features_file (CSV)", "kind": "optional" },
     { "from": "controller", "to": "resolve_config", "label": "argv per grid row", "kind": "data" },
     { "from": "resolve_config", "to": "prepare_audit", "label": "resolved cfg", "kind": "optional" },
     { "from": "resolve_config", "to": "build_cohort", "label": "resolved cfg + train_id", "kind": "data" },
@@ -786,7 +836,7 @@
     { "from": "metrics_report", "to": "summarize", "label": "validation_root/train_id/eval_id", "kind": "data" }
   ],
   "playOrder": [
-    "make_synthetic", "nbia_download", "dicom_to_nifti", "segment_mri_core",
+    "make_synthetic", "nbia_download", "dicom_to_nifti", "segment_mri_core", "mricore_embed",
     "controller", "resolve_config", "prepare_audit",
     "build_cohort", "tabular_features", "split_plan",
     "image_preprocess", "image_branch_fit", "tabular_branch_fit", "publish_fold",
@@ -794,7 +844,7 @@
     "summarize"
   ],
   "branchesAndOptions": [
-    { "title": "Input source", "text": "Real Duke data (download -> convert, optional MRI-CORE masks) OR make-synthetic. Both end up as file paths in experiment.conf PATHS." },
+    { "title": "Input source", "text": "Real Duke data (download -> convert, optional MRI-CORE masks and/or MRI-CORE embeddings for the tabular branch) OR make-synthetic. Both end up as file paths in experiment.conf PATHS." },
     { "title": "Branches", "text": "branches = image,tabular (default; fusion added automatically), image only, or tabular only. Fusion exists only when both branches are trained." },
     { "title": "Image mode", "text": "3D NIfTI (default), 2D slices cut from NIfTI, or ready 2D images (manifest_2d). Subtraction modes none | post_minus_pre | consecutive." },
     { "title": "Lesion location (exactly one)", "text": "external masks (mask_mode roi_crop | mask_channel | foreground_only), Duke boxes as model input (box_mode roi_crop | box_channel | dual_stream, 3D only), or mask-based 2D slice selection. use_annotation_boxes is a separate augmentation (background erasing)." },
@@ -812,6 +862,7 @@
     { "stage": "build_cohort", "text": "NBIA digest column names inferred from legacy code; no run on real Duke data." },
     { "stage": "image_preprocess", "text": "Annotation-box axis convention not verified against real overlays." },
     { "stage": "segment_mri_core", "text": "MRI-CORE masks not verified on real Duke slices." },
+    { "stage": "mricore_embed", "text": "MRI-CORE embeddings not yet computed on real Duke data." },
     { "stage": "controller", "text": "Helios/Slurm runtime not exercised." },
     { "stage": "nbia_download", "text": "TCIA download exercised only against fakes." },
     { "stage": "dicom_to_nifti", "text": "Only synthetic DICOM series tested." },

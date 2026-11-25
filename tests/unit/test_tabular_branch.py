@@ -193,7 +193,7 @@ def test_tabular_branch_round_trip(tmp_path, model, selector, prep, stopping):
         assert "model_feature_importance.csv" in names
     loaded = branch.load(out, fold=1)
     np.testing.assert_allclose(loaded.predict_proba(evaluation), probs)
-    assert loaded.info["predictor_policy"]["version"] == "1.0"
+    assert loaded.info["predictor_policy"]["version"] == "1.1"
     assert loaded.info["seed"] == 42 and loaded.info["fold_seed"] == 7      # legacy: global seed for every fold
     with pytest.raises(ValueError, match="fold"):
         branch.load(out, fold=2)

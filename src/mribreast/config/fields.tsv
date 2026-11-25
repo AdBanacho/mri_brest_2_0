@@ -4,6 +4,7 @@ metadata_file	path	path			1	legacy	NBIA digest xlsx/csv with series metadata (ro
 imaging_features_file	path	path			1	legacy	Duke Imaging_Features.xlsx or CSV export
 annotation_boxes_file	path	path			1	legacy	Duke Annotation_Boxes.xlsx
 density_file	path	path			1	new	Breast_Radiologist_Density_Assessments.xlsx (feature group density)
+mricore_features_file	path	path			1	new	MRI-CORE embedding CSV from 'python -m mribreast.prepare mricore-embed' (feature group mricore)
 allowed_predictors_file	path	path			1	new	Versioned allowed-predictor policy JSON; empty uses the packaged default
 image_root	path	path			1	legacy	Directory of <SeriesInstanceUID>.nii.gz files
 image_manifest_file	path	path			1	new	CSV manifest of ready 2D images (PNG/TIFF) for image_source=manifest_2d
@@ -50,7 +51,7 @@ box_margin	train	float	0.1		1	new	box crop margin as fraction of box extent per 
 box_local_size	train	ints	64 64 32		1	new	dual_stream local crop target in loaded-array axis order (3 ints)
 dual_stream_embed_dim	train	int	128		1	new	dual_stream embedding width per encoder
 box_missing_policy	train	choice	error	error|full_image|drop	1	new	Study without an eligible box: fail, use full image, or drop sample (audited in box_audit.csv)
-feature_groups	train	csv	clinical	clinical|kinetic|morphology|heterogeneity|density	1	legacy	Tabular feature groups (comma list)
+feature_groups	train	csv	clinical	clinical|kinetic|morphology|heterogeneity|density|mricore	1	legacy	Tabular feature groups (comma list)
 feature_model	train	choice	xgboost	xgboost|mlp	1	legacy	Tabular model
 feature_selector	train	choice	none	none|lasso	1	legacy	Fold-local feature selector
 imaging_patient_id_column	train	str	Patient ID		1	legacy	Patient id column in the imaging-features source

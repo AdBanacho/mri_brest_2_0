@@ -19,7 +19,7 @@ window.WORKFLOW = {
     "role": "Python composition root; the only place that builds concrete sources, mask providers and branch trainers"
    },
    {
-    "command": "python -m mribreast prepare-data {nbia-download,dicom-to-nifti,nifti-info,mama-mia-download,mama-mia-map,segment-mri-core}",
+    "command": "python -m mribreast prepare-data {nbia-download,dicom-to-nifti,nifti-info,mama-mia-download,mama-mia-map,segment-mri-core,mricore-embed}",
     "file": "src/mribreast/prepare/cli.py",
     "role": "Separate data-preparation tools with their own optional dependencies (.[prepare], .[segment])"
    },
@@ -433,6 +433,128 @@ window.WORKFLOW = {
    ]
   },
   {
+   "id": "mricore_embed",
+   "name": "MRI-CORE embeddings",
+   "lane": "prep",
+   "col": 0,
+   "row": 4,
+   "kind": "optional",
+   "command": "python -m mribreast.prepare mricore-embed --clinical_features_file ... --metadata_file ... --annotation_boxes_file ... --image_root ... --mricore_repo ... --checkpoint ... --output ...   (Helios: sbatch run_mricore_embed.slurm)",
+   "summary": "Runs a frozen, pretrained MRI foundation model (MRI-CORE) over the slices inside each radiologist's lesion box and turns them into a list of numbers (an embedding) per study. These numbers can then be used by the tabular model as an extra feature group, next to the clinical data.",
+   "purpose": "Frozen-encoder study embeddings -> CSV for feature group mricore (PATHS[mricore_features_file]).",
+   "inputs": [
+    {
+     "name": "Cohort",
+     "description": "built from clinical + metadata tables (same DukeCohortSource as training, --profile)"
+    },
+    {
+     "name": "Annotation_Boxes.xlsx",
+     "description": "Duke lesion boxes; needed for --pool roi / both"
+    },
+    {
+     "name": "NIfTI volumes",
+     "description": "image_root (read only; the output may not be inside it)"
+    },
+    {
+     "name": "mri_foundation checkout + MRI_CORE_vitb.pth",
+     "description": "external, read-only (--mricore_repo, --checkpoint)"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "<output>.csv",
+     "description": "patient_id, study_id, series_uid, phase, n_slices + mricore_<pool>_<k> (768 per pool)"
+    },
+    {
+     "name": "<stem>_audit.csv",
+     "description": "one row per cohort study with status / detail"
+    },
+    {
+     "name": "<stem>_provenance.json",
+     "description": "checkpoint sha256, MRI-CORE git commit, arguments, weight-loading check, counts"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "--phase",
+     "default": "1",
+     "note": "index into the study's ordered series (0 = pre, 1 = first post-contrast)"
+    },
+    {
+     "key": "--subtract_phase",
+     "default": "none",
+     "note": "e.g. 0 for post minus pre"
+    },
+    {
+     "key": "--pool",
+     "default": "roi",
+     "note": "roi | global | both"
+    },
+    {
+     "key": "--layer",
+     "default": "blocks",
+     "note": "blocks (final backbone LayerNorm) | neck"
+    },
+    {
+     "key": "--image_size",
+     "default": "1024"
+    },
+    {
+     "key": "--max_slices",
+     "default": "16",
+     "note": "box slices evenly thinned to this many"
+    },
+    {
+     "key": "--roi_margin",
+     "default": "0.1",
+     "note": "box widening per side for roi pooling"
+    }
+   ],
+   "libraries": [
+    "torch",
+    "nibabel",
+    "pandas",
+    "mri_foundation (external)"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/prepare/mricore_embed.py",
+     "symbol": "run",
+     "line": 288
+    },
+    {
+     "file": "src/mribreast/prepare/mricore_embed.py",
+     "symbol": "study_embedding",
+     "line": 233
+    },
+    {
+     "file": "src/mribreast/prepare/mricore_embed.py",
+     "symbol": "map_backbone_state / load_encoder",
+     "line": 122
+    },
+    {
+     "file": "src/mribreast/data/mricore.py",
+     "symbol": "merge_mricore",
+     "line": 56
+    },
+    {
+     "file": "run_mricore_embed.slurm",
+     "symbol": "Helios GPU job (GH200)"
+    }
+   ],
+   "details": [
+    "Per volume: clip to [0.5, 99.5] percentiles, scale to [0, 1]; per slice: resize to --image_size, 3 channels, ImageNet normalisation (MRI-CORE normalize_type=ours).",
+    "Frozen ViT-B image encoder, no adapters, weights loaded strictly; 768-d patch tokens average-pooled over the box (roi) and/or the whole slice (global), then averaged over slices.",
+    "Label-free and applied to each study independently, so the features carry no fold information and are computed once for the whole cohort.",
+    "Studies without a row (no NIfTI, or no box with --pool roi) get NaN and are imputed fold-locally like any predictor; predictor policy allows the mricore_ prefix."
+   ],
+   "example": "PLACEHOLDER: PLACEHOLDER-P001, PLACEHOLDER-STUDY-001, mricore_roi_000=PLACEHOLDER ... mricore_roi_767=PLACEHOLDER",
+   "uncertain": [
+    "Not yet run on real Duke data; the embeddings' predictive value for the Oncotype label is unknown.",
+    "MRI-CORE pretraining overlap with Duke unknown."
+   ]
+  },
+  {
    "id": "controller",
    "name": "Experiment controller",
    "lane": "orchestrate",
@@ -816,6 +938,10 @@ window.WORKFLOW = {
      "description": "radiologist density (optional group)"
     },
     {
+     "name": "MRI-CORE embeddings CSV",
+     "description": "mricore_features_file from mricore-embed (optional group mricore)"
+    },
+    {
      "name": "allowed_predictors_v1.json",
      "description": "packaged predictor policy"
     }
@@ -830,7 +956,7 @@ window.WORKFLOW = {
     {
      "key": "feature_groups",
      "default": "clinical",
-     "note": "clinical|kinetic|morphology|heterogeneity|density"
+     "note": "clinical|kinetic|morphology|heterogeneity|density|mricore"
     },
     {
      "key": "include_sensitive",
@@ -1846,6 +1972,18 @@ window.WORKFLOW = {
    "kind": "optional"
   },
   {
+   "from": "dicom_to_nifti",
+   "to": "mricore_embed",
+   "label": "NIfTI volumes",
+   "kind": "optional"
+  },
+  {
+   "from": "mricore_embed",
+   "to": "tabular_features",
+   "label": "mricore_features_file (CSV)",
+   "kind": "optional"
+  },
+  {
    "from": "controller",
    "to": "resolve_config",
    "label": "argv per grid row",
@@ -1965,6 +2103,7 @@ window.WORKFLOW = {
   "nbia_download",
   "dicom_to_nifti",
   "segment_mri_core",
+  "mricore_embed",
   "controller",
   "resolve_config",
   "prepare_audit",
@@ -1985,7 +2124,7 @@ window.WORKFLOW = {
  "branchesAndOptions": [
   {
    "title": "Input source",
-   "text": "Real Duke data (download -> convert, optional MRI-CORE masks) OR make-synthetic. Both end up as file paths in experiment.conf PATHS."
+   "text": "Real Duke data (download -> convert, optional MRI-CORE masks and/or MRI-CORE embeddings for the tabular branch) OR make-synthetic. Both end up as file paths in experiment.conf PATHS."
   },
   {
    "title": "Branches",
@@ -2050,6 +2189,10 @@ window.WORKFLOW = {
   {
    "stage": "segment_mri_core",
    "text": "MRI-CORE masks not verified on real Duke slices."
+  },
+  {
+   "stage": "mricore_embed",
+   "text": "MRI-CORE embeddings not yet computed on real Duke data."
   },
   {
    "stage": "controller",

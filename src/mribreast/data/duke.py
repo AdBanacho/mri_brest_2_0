@@ -51,6 +51,7 @@ from mribreast.contracts import (
 )
 from mribreast.data.density import merge_density
 from mribreast.data.imaging_features import IMAGING_FEATURE_GROUPS, merge_imaging_features
+from mribreast.data.mricore import merge_mricore
 from mribreast.data.predictor_policy import check_label_leakage, policy_from_cfg
 
 # ---------------------------------------------------------------------------
@@ -91,7 +92,7 @@ METADATA_REQUIRED = {"Patient ID": PATIENT_ID, "Study Instance UID": STUDY_ID, "
 METADATA_OPTIONAL = {"Series Description": "series_description", "Phase Index": "phase_index",
                      "Series Number": "series_number", "Number of Images": "num_images",
                      "Modality": "modality", "Study Date": "study_date"}
-FEATURE_GROUPS = ("clinical", *IMAGING_FEATURE_GROUPS, "density")
+FEATURE_GROUPS = ("clinical", *IMAGING_FEATURE_GROUPS, "density", "mricore")
 LEGACY_ORDER_NOTE = ("duke_legacy_3d: series_uids are the first phase_count series of each study in the CURRENT "
                      "metadata-file row order (assumed acquisition order pre, post1..; not verified by legacy)")
 
@@ -411,6 +412,15 @@ def add_tabular_groups(studies: pd.DataFrame, clinical: pd.DataFrame, cfg: Mappi
         notes.append(f"density coverage: {report}")
         if report["coverage"] < 0.5:
             notes.append("WARNING: density group covers <50% of studies; missing values are imputed fold-locally")
+    if "mricore" in groups:
+        path = cfg.get("mricore_features_file")
+        if not path:
+            raise CohortError("feature group mricore needs mricore_features_file")
+        frame, cont, report = merge_mricore(frame, path)
+        continuous += cont
+        notes.append(f"mricore coverage: {report}")
+        if report["coverage"] < 1.0:
+            notes.append("WARNING: mricore embeddings are missing for some studies; missing values are imputed fold-locally")
     return frame, continuous, categorical, notes
 
 

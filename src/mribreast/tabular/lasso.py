@@ -47,12 +47,13 @@ FEATURE_GROUP_COLORS = {
     "morphology": "#54A24B",
     "heterogeneity": "#E45756",
     "density": "#B279A2",
+    "mricore": "#9D755D",
 }
-_PREFIX_GROUPS = ("kinetic", "morphology", "heterogeneity", "density")
+_PREFIX_GROUPS = ("kinetic", "morphology", "heterogeneity", "density", "mricore")
 
 
 def feature_group(feature_name: str) -> str:
-    """Family of an encoded feature name (legacy rule + ``density_``)."""
+    """Family of an encoded feature name (legacy rule + ``density_`` / ``mricore_``)."""
     source = str(feature_name).split("__", 1)[-1]
     for group in _PREFIX_GROUPS:
         if source.startswith(f"{group}_"):

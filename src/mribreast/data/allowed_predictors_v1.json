@@ -1,6 +1,6 @@
 {
   "policy_id": "duke_oncotype_allowed_predictors",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Predictors allowed when the Oncotype DX risk class is predicted at the time of the pre-treatment breast MRI (Duke Breast Cancer MRI cohort). Based on legacy CLINICAL_FEATURE_POLICY.md (clinical-safe-v2). The workbook has no per-field recording dates: prospective use requires verifying that every allowed field precedes the assay result.",
   "prediction_times": {
     "mri": {
@@ -26,6 +26,10 @@
       "density": {
         "columns": ["density_consensus", "density_ordinal_mean"],
         "note": "Radiologist BI-RADS density read from the same MRI; research reader study covering ~50 of 922 patients."
+      },
+      "mricore": {
+        "prefixes": ["mricore_"],
+        "note": "Frozen MRI-CORE (label-free foundation model) encoder embeddings of the same pre-treatment MRI; added in 1.1."
       }
     }
   },

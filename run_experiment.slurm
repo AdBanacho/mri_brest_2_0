@@ -430,6 +430,7 @@ check_row() { # context
     [[ "$image" == true && "$tabular" == false ]] || bad 'selection_split=outer reproduces the historical image-only protocol; use branches=image'
   fi
   [[ "$tabular" != true ]] || ! has_item "${ROW[feature_groups]}" density || [[ -n "${PATHS[density_file]}" ]] || bad 'feature group density needs PATHS[density_file]'
+  [[ "$tabular" != true ]] || ! has_item "${ROW[feature_groups]}" mricore || [[ -n "${PATHS[mricore_features_file]}" ]] || bad 'feature group mricore needs PATHS[mricore_features_file]'
   [[ ! "${ROW[trainer_extra_json]}" =~ \"(callbacks|logger|default_root_dir|enable_checkpointing)\" ]] || bad 'trainer_extra_json cannot override callbacks/logger/default_root_dir/enable_checkpointing'
   if [[ "$stage" == validate ]]; then
     if [[ "${VROW[primary_branch]}" == fusion ]]; then [[ "$image" == true && "$tabular" == true ]] || bad 'primary_branch=fusion needs both branches'; fi

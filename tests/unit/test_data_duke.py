@@ -203,7 +203,7 @@ def test_allow_missing_imaging_features_via_cohort(tables, tmp_path):
 # --------------------------------------------------------------------------- policy
 def test_policy_rejects_forbidden_and_unknown():
     policy = load_policy()
-    assert policy.version == "1.0"
+    assert policy.version == "1.1"
     policy.check(["age_at_diagnosis_years", "kinetic_Peak_SER_tumor", "density_consensus"])
     for column in ("oncotype_score", "label", "ER", "PR", "Nottingham grade", "staging_tumor_size", "my_label_copy",
                    "recurrence_event", "neoadjuvant_chemotherapy", "kinetic_oncotype_proxy"):

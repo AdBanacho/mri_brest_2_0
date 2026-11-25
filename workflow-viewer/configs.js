@@ -242,7 +242,7 @@
             ${changed.length ? `<p class="small"><b>Behaves differently:</b></p><ul class="small">${changed.map(([id, v]) => `<li><button type="button" class="linkbtn" data-stage="${esc(id)}">${esc(stageName(id))}</button> <span class="muted">${esc(v.replace(/^(changed|on): /, ""))}</span></li>`).join("")}</ul>` : ""}
             <h4>Input files needed</h4>
             <p class="small">${row.inputs.map((k) => `<code>${esc(k)}</code>`).join(" ")}</p>
-            <p class="muted small">From <code>cli.required_inputs</code> with feature_groups=clinical; kinetic / morphology / heterogeneity add <code>imaging_features_file</code>, density adds <code>density_file</code>.</p>
+            <p class="muted small">From <code>cli.required_inputs</code> with feature_groups=clinical; kinetic / morphology / heterogeneity add <code>imaging_features_file</code>, density adds <code>density_file</code>, mricore adds <code>mricore_features_file</code>.</p>
           </section>
           <section>
             <h4>Independent options: ${fmt(row.n)} variants</h4>

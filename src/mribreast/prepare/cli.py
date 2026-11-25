@@ -10,6 +10,7 @@ Commands (each reads inputs read-only and writes only below its output path):
 * ``mama-mia-map``   - MAMA-MIA x Duke series mapping (legacy ``mama_mia/readFromXlmx.py``)
 * ``segment-mri-core`` - box-prompted lesion masks (MRI-CORE/SAM) + mask manifest (new;
   docs/segmentation-mri-core.md; needs ``.[segment]`` and the read-only ``mri_foundation`` checkout)
+* ``mricore-embed``  - frozen MRI-CORE encoder embeddings per study (feature group ``mricore``)
 """
 
 from __future__ import annotations
@@ -263,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=0, help="first N cohort rows only (smoke runs)")
     p.add_argument("--overwrite", action="store_true", help="replace outputs made with different settings")
     p.set_defaults(func=_segment)
+
+    from mribreast.prepare import mricore_embed
+
+    mricore_embed.add_parser(sub)
     return parser
 
 

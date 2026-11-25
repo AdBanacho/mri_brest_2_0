@@ -204,6 +204,9 @@ def stage_notes(v: dict[str, str]) -> dict[str, str]:
     if not tabular:
         for s in ("tabular_features", "tabular_branch_fit"):
             notes[s] = "off: no tabular branch"
+        notes["mricore_embed"] = "off: MRI-CORE embeddings feed the tabular branch"
+    else:
+        notes["mricore_embed"] = "on: only if feature_groups includes mricore (reads NIfTI volumes even without the image branch)"
     if not (image and tabular):
         notes["fusion"] = "off: fusion needs both branches"
     if image and v.get("image_source") == "manifest_2d":
@@ -398,7 +401,8 @@ def build() -> dict[str, Any]:
             "Validity of every combination is decided by schema.validate_combinations (the code the CLI runs).",
             "A dimension shown as 'n/a' has no effect in that configuration and is not multiplied.",
             "Required inputs are computed by cli.required_inputs with feature_groups=clinical; kinetic/morphology/"
-            "heterogeneity add imaging_features_file and density adds density_file.",
+            "heterogeneity add imaging_features_file, density adds density_file and mricore adds "
+            "mricore_features_file.",
             "annotation_boxes_file is assumed to be configured (box_mode needs it).",
         ],
     }

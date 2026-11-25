@@ -65,6 +65,8 @@ def required_inputs(cfg: Mapping[str, Any]) -> list[str]:
             keys.append("imaging_features_file")
         if "density" in groups:
             keys.append("density_file")
+        if "mricore" in groups:
+            keys.append("mricore_features_file")
     return list(dict.fromkeys(keys))
 
 

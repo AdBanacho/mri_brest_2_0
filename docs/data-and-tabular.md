@@ -73,6 +73,32 @@ same pre-treatment MRI; it is a research reader study, not a routinely available
 report field, and its availability is non-random (selection bias) — use only as an
 explicit sensitivity analysis.
 
+### MRI-CORE embeddings (`mricore_features_file`, group `mricore`, default OFF) — `mribreast.data.mricore`
+Frozen encoder embeddings from the MRI-CORE foundation model
+(`~/mri_foundation`, ViT-B, adapters off), produced by the separate GPU job
+`python -m mribreast.prepare mricore-embed` (`run_mricore_embed.slurm`). Per
+cohort study it takes one DCE phase (`--phase 1` = first post-contrast by
+default, optional `--subtract_phase`), the axial slices inside the patient's
+annotation box (thinned to `--max_slices`), clips each volume to its
+[0.5, 99.5] percentiles, resizes slices to 1024², applies ImageNet
+normalisation and average-pools the encoder map over the box (`roi`) and/or the
+whole slice (`global`), then averages over slices. Features are the 768-d ViT
+patch tokens after the backbone's final LayerNorm (`--layer blocks`): the
+released `MRI_CORE_vitb.pth` is a DINOv2-style `backbone.*` checkpoint with no
+trained SAM neck. The job loads it with its own key mapping because upstream
+`build_sam.py` stores the resized `pos_embed` under the unmapped key, so with
+`strict=False` the positional embedding is silently left at zero.
+Output CSV: `patient_id, study_id, series_uid, phase, n_slices,
+mricore_<pool>_<k>`; only `mricore_*` columns become (continuous) predictors.
+`*_audit.csv` lists skipped studies (missing box/NIfTI); `*_provenance.json`
+records the checkpoint sha256, MRI-CORE commit, arguments and a weight-loading
+check (MRI-CORE loads with `strict=False`, so the job fails if encoder tensors
+stay at random init). The CSV is written outside `image_root`, never next to the
+NIfTI files. The encoder is label-free and applied per study, so the features
+hold no fold information; studies without a row get NaN (fold-local imputation)
+and the cohort notes warn when coverage < 100 %. With ~256 predictors use
+`feature_selector=lasso`.
+
 ### Annotation boxes
 Read by the imaging package; the synthetic writer produces the legacy 7-column
 `Sheet1` layout (see 6).
@@ -132,11 +158,11 @@ Legacy fusion always used the binary scheme (`configurable_imaging_features_fusi
 
 ## 4. Allowed-predictor policy (`mribreast.data.predictor_policy`)
 Packaged `src/mribreast/data/allowed_predictors_v1.json` (`policy_id
-duke_oncotype_allowed_predictors`, version `1.0`); `allowed_predictors_file`
+duke_oncotype_allowed_predictors`, version `1.1`; 1.1 added the `mricore` group); `allowed_predictors_file`
 overrides it (major version must be 1). Per `prediction_time` (`mri`), allowed
 groups: clinical (8 legacy columns), clinical_sensitive (`race_ethnicity`, needs
 `include_sensitive`), `kinetic_`/`morphology_`/`heterogeneity_` prefixes, density
-(2 columns). Forbidden: exact names (`oncotype_score`, `label`, ids), tokens (ER,
+(2 columns), `mricore_` prefix. Forbidden: exact names (`oncotype_score`, `label`, ids), tokens (ER,
 PR, HER2, subtype, stage/staging, grade/Nottingham/histologic, metastatic,
 surgery/therapy/chemo/endocrine/radiation, response, recurrence, death …) and
 substrings (`oncotype`, `label`, …). `check()` rejects every column that is
@@ -228,6 +254,7 @@ with the score. UIDs are `2.25.<random>`; no real patient data.
 | Per-study audit | none (prints) | `CohortTable.audit` | `test_legacy_eligibility_*` |
 | Predictor policy | hard-coded list + `_clinical-safe-v2` name suffix | versioned JSON + checks | `test_policy_*` |
 | Density | not read | optional group | `test_density_*` |
+| MRI-CORE embeddings | not available | optional group `mricore` | `tests/unit/test_mricore.py` |
 | Selector preprocessing | outer | `outer` default, `fold_local` option | `test_fold_local_preprocessing_differs_from_outer` |
 | MLP early stopping | random 15 % rows | `internal` default, `grouped`, `off` | `test_mlp_grouped_early_stopping_respects_groups` |
 | Positive boost class | label 1 | `positive_class` (default 1) | `test_sample_weights_*` |
