@@ -11,6 +11,7 @@
       { "command": "python -m mribreast {prepare,train,validate,summarize,make-synthetic,import-legacy,prepare-data,fields} --<key> <value>", "file": "src/mribreast/cli.py", "role": "Python composition root; the only place that builds concrete sources, mask providers and branch trainers" },
       { "command": "python -m mribreast prepare-data {nbia-download,dicom-to-nifti,nifti-info,mama-mia-download,mama-mia-map,segment-mri-core,mricore-embed}", "file": "src/mribreast/prepare/cli.py", "role": "Separate data-preparation tools with their own optional dependencies (.[prepare], .[segment])" },
       { "command": "experiment.conf, configs/*.conf", "file": "experiment.conf", "role": "Bash-readable configuration: PATHS, TRAIN, TRAIN_GRID, VALIDATE, VALIDATE_GRID, SUMMARIZE" },
+      { "command": "bash configs/campaign/submit.sh [--dry-run] [A01 B01 ...]", "file": "configs/campaign/README.md", "role": "30-run screening campaign: shared baseline + one-factor variations; submits MRI-CORE prerequisites, train -> validate per run, one summary" },
       { "command": "src/mribreast/config/fields.tsv", "file": "src/mribreast/config/fields.tsv", "role": "Single field registry read by both Bash and Python (key, section, type, default, choices, identity)" }
     ],
     "labelNote": "Label: Oncotype DX recurrence score <=18 -> class 0, >18 -> class 1 (optional 3-class <=18 / (18,31] / >31). These cut-offs are research definitions of this project, not clinical guidance. oncotype_score is never used as a predictor.",
@@ -345,10 +346,10 @@
         { "name": "CohortTable.audit", "description": "included / excluded studies with reasons" }
       ],
       "parameters": [
-        { "key": "profile", "default": "duke_legacy_3d", "note": "or general" },
+        { "key": "profile", "default": "duke_legacy_3d", "note": "shipped Duke configs and campaign: general" },
         { "key": "label_scheme", "default": "oncotype_binary_18", "note": "or oncotype_3class_18_31" },
-        { "key": "phase_count", "default": "5" },
-        { "key": "phase_order", "default": "metadata", "note": "explicit requires profile=general" },
+        { "key": "phase_count", "default": "5", "note": "shipped Duke configs: 4 (pre + 3 posts)" },
+        { "key": "phase_order", "default": "metadata", "note": "shipped Duke configs: explicit (requires profile=general)" },
         { "key": "positive_class", "default": "1" }
       ],
       "libraries": ["pandas", "openpyxl"],
@@ -359,13 +360,14 @@
         { "file": "src/mribreast/data/duke.py", "symbol": "select_studies_general", "line": 286 }
       ],
       "details": [
-        "duke_legacy_3d: series = the first phase_count series of each study in metadata row order (bit-compatible with the legacy repo).",
-        "general: phases parsed from series descriptions; requires pre-contrast + consecutive post-contrast phases, otherwise the study is excluded with a reason.",
+        "duke_legacy_3d: series = the first phase_count series of each study in metadata row order (bit-compatible with the legacy repo). On the real Duke digest this puts the non-DCE 'ax t1' series into 220/261 studies in arbitrary order; use it only to reproduce legacy numbers.",
+        "general: phases parsed from series descriptions; an unlabelled pre-contrast series named like its posts without the phase token ('ax 3d dyn' next to 'Ph1/ax 3d dyn') becomes phase 0. Requires pre-contrast + consecutive post-contrast phases, otherwise the study is excluded with a reason.",
+        "Real Duke data (checked 2026-11-25): general / explicit / phase_count=4 keeps 257 of 261 scored studies (159 / 98), one geometry across phases, every annotation box inside the volume.",
         "Final inner join with the clinical table; oncotype_score is dropped before anything is written."
       ],
       "example": "PLACEHOLDER row: patient_id=PLACEHOLDER-P001, study_id=PLACEHOLDER-S001, label=1, series_uids=UID-A|UID-B|UID-C|UID-D|UID-E",
       "uncertain": [
-        "The NBIA digest is not in either repository; its column names are inferred from legacy code, and its row order defines legacy phase selection (docs/acceptance.md §5).",
+        "The NBIA digest is not in either repository; its column names were inferred from legacy code (they load correctly on the real digest).",
         "No training or evaluation has been run on real Duke data."
       ]
     },
@@ -486,7 +488,7 @@
         "Erasing: one background cuboid of side dim//4, up to 8 draws, rejected if it touches the lesion box; fit rows only; RNG = default_rng([seed, epoch, item]).",
         "Mask policies (missing/empty/invalid): error | full_image | drop; every decision is audited."
       ],
-      "example": "PLACEHOLDER tensor: 5 channels x 256 x 256 x 64 (one channel per contrast phase)",
+      "example": "PLACEHOLDER tensor: 4 channels x 256 x 256 x 64 (pre + 3 post-contrast phases, shipped Duke configs)",
       "uncertain": [
         "Annotation-box convention (0-based inclusive, column/row/slice -> array axes 0/1/2) is reproduced from legacy code only and has not been checked against real DICOM overlays. Treat box-based results as provisional (docs/imaging.md §4)."
       ]
@@ -859,8 +861,8 @@
     { "name": "nifti-info", "command": "python -m mribreast prepare-data nifti-info --image_root ...", "text": "Lists the geometry of converted NIfTI files.", "source": "src/mribreast/prepare/cli.py:60" }
   ],
   "uncertainties": [
-    { "stage": "build_cohort", "text": "NBIA digest column names inferred from legacy code; no run on real Duke data." },
-    { "stage": "image_preprocess", "text": "Annotation-box axis convention not verified against real overlays." },
+    { "stage": "build_cohort", "text": "Cohort built and audited on real Duke data, but no model has been trained on it yet." },
+    { "stage": "image_preprocess", "text": "All 257 boxes fall inside their volumes, but the row/column axis order has not been checked against real overlays (square slices fit either way)." },
     { "stage": "segment_mri_core", "text": "MRI-CORE masks not verified on real Duke slices." },
     { "stage": "mricore_embed", "text": "MRI-CORE embeddings not yet computed on real Duke data." },
     { "stage": "controller", "text": "Helios/Slurm runtime not exercised." },

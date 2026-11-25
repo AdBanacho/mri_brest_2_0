@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -275,8 +276,20 @@ _ASSOC = re.compile(r"declare -A (\w+)=\((.*?)\)\s*(?:#.*)?$", re.S | re.M)
 _ENTRY = re.compile(r"\[(\w+)\]=('(?:[^']*)'|\"(?:[^\"]*)\"|[^\s#)]*)")
 
 
-def parse_conf(path: Path) -> dict[str, dict[str, str]]:
+def _resolved_text(path: Path) -> str:
+    """Config text; a file that sources another one (configs/campaign/) is resolved by Bash itself."""
     text = path.read_text(encoding="utf-8")
+    if not re.search(r"^\s*(source|\.)\s", text, re.M):
+        return text
+    import subprocess
+
+    script = 'source "$1" >/dev/null; declare -p TRAIN TRAIN_GRID VALIDATE VALIDATE_GRID PATHS 2>/dev/null; true'
+    return subprocess.run(["bash", "-c", script, "bash", str(path)], cwd=path.parent, capture_output=True,
+                          text=True, check=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")}).stdout
+
+
+def parse_conf(path: Path) -> dict[str, dict[str, str]]:
+    text = _resolved_text(path)
     blocks: dict[str, dict[str, str]] = {}
     for match in re.finditer(r"declare -A (\w+)=\(", text):
         name, i, depth = match.group(1), match.end(), 1
@@ -303,7 +316,8 @@ def structural_key(values: dict[str, str]) -> tuple:
 
 def shipped_configs(index_of: dict[tuple, int]) -> list[dict[str, Any]]:
     out = []
-    files = [PROJECT / "experiment.conf", *sorted((PROJECT / "configs").glob("*.conf"))]
+    files = [PROJECT / "experiment.conf", *sorted((PROJECT / "configs").glob("*.conf")),
+             *sorted(f for f in (PROJECT / "configs" / "campaign").glob("*.conf") if f.name != "base.conf")]
     for path in files:
         b = parse_conf(path)
         train, grid = b.get("TRAIN", {}), b.get("TRAIN_GRID", {})
@@ -383,7 +397,7 @@ def build() -> dict[str, Any]:
                and f.key not in DIM_KEYS]
     return {
         "source": ["src/mribreast/config/fields.tsv", "src/mribreast/config/schema.py:validate_combinations",
-                   "src/mribreast/cli.py:required_inputs", "experiment.conf", "configs/*.conf"],
+                   "src/mribreast/cli.py:required_inputs", "experiment.conf", "configs/*.conf", "configs/campaign/*.conf"],
         "dims": dims,
         "pathKeys": path_keys,
         "rowFormat": ["dimension value indexes (-1 = n/a)", "categorical variants", "shared[] index: variant parts",

@@ -10,7 +10,7 @@ Interactive diagram of the `mribreast` 2.0 pipeline: data preparation → contro
 | --- | --- |
 | `workflow.json` | **Source of truth.** Stages (purpose, inputs/outputs, parameters, source file:line, uncertain points), edges, play order. Written from an analysis of the code and `docs/`. |
 | `workflow-data.js` | Generated copy of `workflow.json` (`window.WORKFLOW = …`), so the page works from `file://`. Never edit it by hand. |
-| `config_space.py` | Builds the configuration space using the project's own code: `fields.tsv`, `schema.validate_combinations` (validity), `cli.required_inputs` (input files) and the shipped `experiment.conf` / `configs/*.conf`. |
+| `config_space.py` | Builds the configuration space using the project's own code: `fields.tsv`, `schema.validate_combinations` (validity), `cli.required_inputs` (input files) and the shipped `experiment.conf` / `configs/*.conf` / `configs/campaign/*.conf` (resolved by Bash when a file `source`s the campaign base). |
 | `config-data.js` | Generated configuration space. Never edit it by hand. |
 | `sync_data.py` | Regenerates both `.js` data files and checks the stage references. `--check` exits 1 if either file is stale. Re-run it after changing `workflow.json`, `fields.tsv`, `schema.py` or any `.conf`. |
 | `index.html`, `styles.css`, `app.js`, `configs.js` | The app (plain HTML/CSS/JS, no dependencies). |
@@ -30,7 +30,7 @@ Switch with the **Configurations** tab (or `V`).
 
 - **All valid configurations:** every combination of the 13 settings that change the pipeline's shape (branches, profile, label scheme, selection split, image dimension/source, subtraction, mask provider/mode, 2D slice selection, box mode, box erasing, feature selector), checked by the real validator. 54,456 combinations were checked and 3,250 are valid. A setting with no effect in a combination is shown as `n/a`, so identical pipelines are not counted twice. Filters show how many configurations each choice leaves and grey out impossible ones. Open a configuration to see which stages are skipped or behave differently, the input files it needs, how many variants the independent options add (≈ 103 billion in total), and the CLI / `experiment.conf` lines to run it. **Show in pipeline** fades the unused stages on the diagram, and Play skips them.
 - **Every option:** all 107 keys of `fields.tsv` with type, default, allowed values, whether the key is part of `train_id`, and the stage each one configures. Filter by search, group, stage or "shape only".
-- **Shipped config files:** `experiment.conf` and `configs/*.conf` expanded the way the controller expands them, with each row validated and linked to its configuration.
+- **Shipped config files:** `experiment.conf`, `configs/*.conf` and the 30-run screening campaign `configs/campaign/*.conf`, expanded the way the controller expands them, with each row validated and linked to its configuration.
 
 Free numeric settings (epochs, learning rate, sizes and so on, 51 fields) can take any value in range and are listed but not counted.
 

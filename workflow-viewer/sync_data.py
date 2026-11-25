@@ -6,7 +6,7 @@
 * workflow-data.js  <- workflow.json (hand-written analysis; the source of truth for stages)
 * config-data.js    <- the configuration space, computed by config_space.py with the project's
                        own fields.tsv, schema.validate_combinations, cli.required_inputs and the
-                       shipped experiment.conf / configs/*.conf. Re-run after changing any of them.
+                       shipped experiment.conf / configs/*.conf / configs/campaign/*.conf. Re-run after changing any of them.
 
 Never edit the generated .js files by hand. Standard library only (mribreast.config.schema and
 mribreast.cli need only the standard library at import time).
