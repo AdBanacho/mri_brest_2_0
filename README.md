@@ -3,7 +3,7 @@
 This is a rewrite of the `mri_brest` research pipeline (reference SHA `127a260`). It covers:
 
 - 3D MRI and **real 2D** classification (2D slices cut from NIfTI, or ready PNG/TIFF images).
-- **External segmentation masks** (`roi_crop`, `mask_channel`, `foreground_only`).
+- **External segmentation masks** (`roi_crop`, `mask_channel`, `foreground_only`), including lesion masks produced here by MRI-CORE prompted with the Duke annotation boxes (`prepare-data segment-mri-core`).
 - Tabular branches (clinical plus the Duke imaging-feature groups, and optional radiologist density).
 - **Late fusion**: `p = α·p_image + (1−α)·p_tabular`.
 - Patient-grouped nested cross-validation, with audited and resumable artifacts.
@@ -17,6 +17,7 @@ It runs on a laptop CPU and on Slurm (Helios GH200) through one Bash-readable co
 ```bash
 python -m pip install -e ".[test]"            # compute stage (train/validate/summarize)
 python -m pip install -e ".[prepare]"         # optional: NBIA download, DICOM→NIfTI, MAMA-MIA
+python -m pip install -e ".[segment]"         # optional: MRI-CORE box-prompted lesion segmentation
 ```
 
 Python ≥3.10. The verified versions are listed in `docs/reference-test-results.md`. On Helios, NumPy and PyTorch come from the `ML-bundle` module (see `docs/slurm.md`).
@@ -70,7 +71,7 @@ The commands for a short smoke run are in `docs/slurm.md`.
 | `src/mribreast/protocol` | split plan, thresholds, fusion, resumable training, validation |
 | `src/mribreast/reporting` | metrics, validation tables/plots, summary ranking |
 | `src/mribreast/legacy` | historical report importer/exporter, legacy checkpoint names |
-| `src/mribreast/prepare` | explicit data preparation (NBIA/TCIA, DICOM→NIfTI, MAMA-MIA) |
+| `src/mribreast/prepare` | explicit data preparation (NBIA/TCIA, DICOM→NIfTI, MAMA-MIA, MRI-CORE lesion segmentation → mask manifest) |
 | `run_experiment.{sh,slurm}`, `experiment.conf`, `configs/` | Bash controller and example configurations |
 
 ## Documentation
@@ -81,5 +82,6 @@ The commands for a short smoke run are in `docs/slurm.md`.
 - `docs/protocol.md`, `docs/data-and-tabular.md`, `docs/imaging.md`, `docs/slurm.md`: reference for each area.
 - `docs/reference-test-results.md`: results from running the reference repository's own tests.
 - `docs/acceptance.md`: what was actually run, the results, and the open verification limits.
+- `docs/segmentation-mri-core.md`: lesion masks from MRI-CORE (`../mri_foundation`, read-only) prompted with the Duke annotation boxes. Covers the weight analysis, the zero-shot findings, the design, and leakage/provenance.
 
 Raw images, identifying metadata, checkpoints and run outputs are git-ignored and must never be committed.

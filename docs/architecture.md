@@ -19,7 +19,7 @@ coordinator (owner of `config/`, `contracts.py`, `artifacts/`, `reporting/metric
 | `mribreast.protocol` | Split plan (outer `StratifiedGroupKFold`, inner calibration split, roles), threshold tuning, fusion, training loop over folds (resume), validation (load artifacts, verify, predict, thresholds, metrics) | contracts, artifacts, reporting.metrics — **never** imports a concrete model |
 | `mribreast.reporting` | Metric definitions, validation tables/plots, summarize + ranking, `validation_report.md` | contracts |
 | `mribreast.legacy` | Importer/exporter for historical CSV/JSON, legacy checkpoint filename parsing, run-id mapping | reporting |
-| `mribreast.prepare` | Explicit data-preparation stage: NBIA/TCIA download, DICOM→NIfTI (UID + geometry verified), MAMA-MIA mapping import. Own optional deps (`.[prepare]`), local fakes in tests | contracts |
+| `mribreast.prepare` | Explicit data-preparation stage: NBIA/TCIA download, DICOM→NIfTI (UID + geometry verified), MAMA-MIA mapping import, box-prompted lesion segmentation with MRI-CORE/SAM → mask manifest (`prepare/segmentation`, `docs/segmentation-mri-core.md`; imports the read-only external `mri_foundation` checkout). Own optional deps (`.[prepare]`, `.[segment]`), local fakes in tests | contracts, imaging (geometry, annotations, masks) |
 | `mribreast.cli` | Composition root: builds sources, providers, branch trainers from the resolved config and calls protocol functions. `python -m mribreast {prepare,train,validate,summarize,import-legacy,make-synthetic,fields}` | everything |
 | `run_experiment.sh/.slurm` | Bash-only controller: reads `experiment.conf` + `fields.tsv`, expands grid, submits arrays, frozen snapshots, compute-node env | `fields.tsv` |
 

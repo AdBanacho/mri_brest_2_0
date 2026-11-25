@@ -110,6 +110,48 @@ The reviewer confirmed 5 findings:
 
 All review tests pass now.
 
+## 4b. Lesion segmentation with MRI-CORE (executed 2026-11-24/25)
+
+`docs/segmentation-mri-core.md`. External repository `C:\code\mri_foundation` at
+`0f4f452614013873f8bb58a1fd613dbe36b58aba`, weights `mri_foundation.pth` (sha256 prefix `0ca90aeba095`) and
+`sam_vit_b_01ec64.pth`. Runs used a scratch venv = the environment above + `einops 0.8.2` +
+`torchvision 0.24.1` (CPU), because the main environment has no `torchvision`. The checkout was unchanged
+after every run (`git status --porcelain --untracked-files=all` empty, no `__pycache__`).
+
+* Weight analysis: MRI-CORE = DINOv2 ViT-B/16 backbone only. Building it as the repo does takes the neck,
+  prompt encoder, decoder and `pos_embed` from SAM. With the repo's forced `num_cls=1`, the decoder's mask
+  tokens are random. Our loader reproduces the repo's `num_cls=3` build tensor for tensor
+  (`test_loader_matches_the_repos_own_builder`).
+* Zero-shot box prompts on **toy** 2D lesions (not MRI): MRI-CORE with SAM's decoder reached Dice 0.92–0.97
+  (large lesions) and 0.69–0.86 (8–24 px lesions on 512²). SAM ViT-B scored similarly. MRI-CORE with
+  `num_cls=1` scored 0.00–0.52.
+* `tests/unit/test_segmentation_mri_core.py` in the scratch venv: **3 passed** (29 s). In the main
+  environment these tests skip (no `torchvision`).
+* Real-model CLI smoke: `prepare-data segment-mri-core --weights mri_core --device cpu --limit 2` on
+  synthetic NIfTI (48×40×10, cohort built from the tables with `profile=general`). 2/2 segmented, exit 0.
+  Masks cover 82–99% of each box (synthetic lesion = box) and 0% lies outside the clip region.
+* Pipeline, CLI and manifest/audit integration with a fake segmenter: `tests/unit/test_segmentation.py`.
+  End to end (segment → train → validate → summarize, 3D `roi_crop` and 2D `mask_max_area` +
+  `mask_channel`): `tests/e2e/test_segmentation_e2e.py`.
+* Full suite after these changes (2026-11-25, main environment,
+  `MRI_BREAST_LEGACY_REPO=C:/code/mri_brest python -m pytest tests -q -p no:cacheprovider`):
+  **428 passed, 0 failed, 3 skipped** (12 min 50 s). The 3 skips are the real-weight tests (no `torchvision`
+  in the main environment), which passed in the scratch venv as listed above. The reference repository was
+  unchanged afterwards (`git status --porcelain --ignored` empty).
+
+Not verified: any real Duke slice (quality, axis convention of the prompts), GPU/Helios runs, Dice
+against expert masks (MAMA-MIA masks are not imported yet), and MRI-CORE's pretraining overlap with Duke.
+
+Helios job script (2026-11-25): `segment_mri_core.slurm` replaces the earlier `sbatch --wrap` recipe. That
+recipe called `.venvs/<arch>/bin/python`, which does not exist when `AUTO_INSTALL_PYTHON_PACKAGES=true`
+(the controller's env is `runtime-<hash>/`), and its `-o` directory was never created. Checked:
+`tests/slurm/test_segment.sh` with fake sbatch/module/python (preflight, submission, env built once with
+the module constraints, argv), and `bash segment_mri_core.slurm --local --config
+configs/synthetic_cpu_3d.conf --output-dir <scratch> -- --device cpu --limit 2` with the real weights on
+CPU (2/2 segmented). The real-weight tests also passed in the main environment after installing
+`einops 0.8.2` + `torchvision 0.24.1` (3 passed). Not run on Helios: sbatch, `module load ML-bundle`, a
+torchvision wheel that matches the module torch on aarch64, CUDA.
+
 ## 5. Not verified: requires data or the cluster
 
 * **Real Duke data.** No training or evaluation has been run on real Duke images. The NBIA

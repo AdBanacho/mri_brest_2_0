@@ -1,0 +1,2075 @@
+// GENERATED from workflow.json by sync_data.py - do not edit by hand.
+window.WORKFLOW = {
+ "meta": {
+  "project": "mribreast 2.0 (folder mri_brest_2_0)",
+  "title": "MRI breast pipeline: Oncotype DX risk from MRI + tabular data",
+  "analysedOn": "2026-11-25",
+  "schemaVersion": 1,
+  "oneLiner": "Predicts whether a breast cancer patient's Oncotype DX recurrence score is high (>18) or low (<=18) from DCE-MRI images and tabular features, using patient-grouped nested cross-validation and late fusion of an image model and a tabular model.",
+  "howToRead": "Read the columns from left to right. Data preparation (optional) produces input files. The controller turns a config file into one command per experiment. Train fits one image model and one tabular model per cross-validation fold. Validate scores the held-out patients, fuses the two models and tunes decision thresholds. Summarize ranks all configurations.",
+  "entryPoints": [
+   {
+    "command": "bash run_experiment.sh --train|--validate|--summarize|--prepare [--local] [--config FILE]",
+    "file": "run_experiment.sh -> run_experiment.slurm",
+    "role": "Bash controller (Slurm arrays, or --local on this machine)"
+   },
+   {
+    "command": "python -m mribreast {prepare,train,validate,summarize,make-synthetic,import-legacy,prepare-data,fields} --<key> <value>",
+    "file": "src/mribreast/cli.py",
+    "role": "Python composition root; the only place that builds concrete sources, mask providers and branch trainers"
+   },
+   {
+    "command": "python -m mribreast prepare-data {nbia-download,dicom-to-nifti,nifti-info,mama-mia-download,mama-mia-map,segment-mri-core}",
+    "file": "src/mribreast/prepare/cli.py",
+    "role": "Separate data-preparation tools with their own optional dependencies (.[prepare], .[segment])"
+   },
+   {
+    "command": "experiment.conf, configs/*.conf",
+    "file": "experiment.conf",
+    "role": "Bash-readable configuration: PATHS, TRAIN, TRAIN_GRID, VALIDATE, VALIDATE_GRID, SUMMARIZE"
+   },
+   {
+    "command": "src/mribreast/config/fields.tsv",
+    "file": "src/mribreast/config/fields.tsv",
+    "role": "Single field registry read by both Bash and Python (key, section, type, default, choices, identity)"
+   }
+  ],
+  "labelNote": "Label: Oncotype DX recurrence score <=18 -> class 0, >18 -> class 1 (optional 3-class <=18 / (18,31] / >31). These cut-offs are research definitions of this project, not clinical guidance. oncotype_score is never used as a predictor.",
+  "placeholderNote": "All examples in this viewer are illustrative placeholders (IDs such as PLACEHOLDER-P001). No real patient data is shown or was read to build it.",
+  "sources": [
+   "README.md",
+   "CLAUDE.md",
+   "docs/architecture.md",
+   "docs/protocol.md",
+   "docs/imaging.md",
+   "docs/slurm.md",
+   "docs/segmentation-mri-core.md",
+   "docs/acceptance.md",
+   "src/mribreast/**"
+  ]
+ },
+ "lanes": [
+  {
+   "id": "prep",
+   "title": "1. Data preparation",
+   "subtitle": "optional, run once",
+   "col": 0,
+   "span": 1
+  },
+  {
+   "id": "orchestrate",
+   "title": "2. Orchestration",
+   "subtitle": "config -> commands",
+   "col": 1,
+   "span": 1
+  },
+  {
+   "id": "train",
+   "title": "3. Train",
+   "subtitle": "per outer fold",
+   "col": 2,
+   "span": 2
+  },
+  {
+   "id": "validate",
+   "title": "4. Validate",
+   "subtitle": "per outer fold",
+   "col": 4,
+   "span": 1
+  },
+  {
+   "id": "summarize",
+   "title": "5. Summarize",
+   "subtitle": "across runs",
+   "col": 5,
+   "span": 1
+  }
+ ],
+ "stages": [
+  {
+   "id": "make_synthetic",
+   "name": "Make synthetic data",
+   "lane": "prep",
+   "col": 0,
+   "row": 0,
+   "kind": "alternative",
+   "command": "python -m mribreast make-synthetic --out runs/synthetic/data",
+   "summary": "Creates a small, completely made-up dataset that has the same file formats as the real Duke data. This lets you run and test the whole pipeline on a laptop without any patient data.",
+   "purpose": "Stand-in for the real Duke inputs in CPU acceptance runs and tests.",
+   "inputs": [
+    {
+     "name": "Command-line options",
+     "description": "number of fake patients, random seed, volume size"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "Synthetic Duke-style workbooks",
+     "description": "clinical features, NBIA metadata digest, imaging features, annotation boxes (.xlsx)"
+    },
+    {
+     "name": "nifti/<SeriesInstanceUID>.nii.gz",
+     "description": "fake 3D MRI phases with a bright ellipsoid 'lesion'"
+    },
+    {
+     "name": "images2d/ + image manifest",
+     "description": "ready 2D images for image_source=manifest_2d"
+    },
+    {
+     "name": "masks/ + mask manifest",
+     "description": "lesion masks for mask_provider=local_files"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "n_patients",
+     "default": "48"
+    },
+    {
+     "key": "seed",
+     "default": "0"
+    },
+    {
+     "key": "shape",
+     "default": "24 24 12",
+     "note": "3D volume size"
+    },
+    {
+     "key": "size_2d",
+     "default": "32 32"
+    },
+    {
+     "key": "images_per_study",
+     "default": "3"
+    }
+   ],
+   "libraries": [
+    "numpy",
+    "pandas",
+    "nibabel",
+    "openpyxl",
+    "pillow"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "cmd_make_synthetic",
+     "line": 192
+    },
+    {
+     "file": "src/mribreast/synthetic/dataset.py",
+     "symbol": "make_synthetic_dataset",
+     "line": 30
+    },
+    {
+     "file": "src/mribreast/synthetic/duke.py",
+     "symbol": "write_duke_tables"
+    },
+    {
+     "file": "src/mribreast/synthetic/imaging.py",
+     "symbol": "write_nifti_series / write_2d_dataset / write_masks"
+    }
+   ],
+   "details": [
+    "Alternative to stages 'Download DICOM' + 'DICOM -> NIfTI': point experiment.conf PATHS (or configs/synthetic_cpu_*.conf) at runs/synthetic/data.",
+    "Used by the CPU acceptance configs configs/synthetic_cpu_2d.conf and synthetic_cpu_3d*.conf and by tests/e2e."
+   ],
+   "example": "PLACEHOLDER output: runs/synthetic/data/nifti/PLACEHOLDER-SERIES-UID.nii.gz (24x24x12 voxels, synthetic).",
+   "uncertain": []
+  },
+  {
+   "id": "nbia_download",
+   "name": "Download DICOM (NBIA/TCIA)",
+   "lane": "prep",
+   "col": 0,
+   "row": 1,
+   "kind": "optional",
+   "command": "python -m mribreast prepare-data nbia-download --metadata_file ... --clinical_features_file ... --dest ...",
+   "summary": "Downloads the raw MRI scans (DICOM files) of the Duke Breast Cancer MRI collection from the public TCIA/NBIA archive, only for patients that have an Oncotype score.",
+   "purpose": "Fetch raw DICOM series for the outcome cohort.",
+   "inputs": [
+    {
+     "name": "NBIA metadata digest (.xlsx/.csv)",
+     "description": "lists Patient ID, Study/Series Instance UIDs"
+    },
+    {
+     "name": "Clinical workbook",
+     "description": "needed for --cohort outcome (patients with an Oncotype score)"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "<dest>/<SeriesInstanceUID>/",
+     "description": "DICOM files per series, plus a download manifest"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "--cohort",
+     "default": "outcome"
+    },
+    {
+     "key": "--collection",
+     "default": "Duke-Breast-Cancer-MRI"
+    },
+    {
+     "key": "--limit",
+     "default": "0",
+     "note": "0 = all"
+    },
+    {
+     "key": "--dry_run",
+     "default": "off"
+    }
+   ],
+   "libraries": [
+    "urllib (stdlib)",
+    "zipfile",
+    "pandas"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/prepare/cli.py",
+     "symbol": "_nbia_download",
+     "line": 26
+    },
+    {
+     "file": "src/mribreast/prepare/nbia.py",
+     "symbol": "download_studies",
+     "line": 190
+    }
+   ],
+   "details": [
+    "Separate stage with its own optional dependencies (pip install -e .[prepare]); train/validate never import prepare/.",
+    "Zip members are checked for unsafe paths before extraction (_safe_members)."
+   ],
+   "example": "PLACEHOLDER: downloads/PLACEHOLDER-SERIES-UID/*.dcm",
+   "uncertain": [
+    "Only exercised against local fakes; real TCIA downloads have not been run (docs/acceptance.md §5)."
+   ]
+  },
+  {
+   "id": "dicom_to_nifti",
+   "name": "DICOM -> NIfTI",
+   "lane": "prep",
+   "col": 0,
+   "row": 2,
+   "kind": "optional",
+   "command": "python -m mribreast prepare-data dicom-to-nifti --download_root ... --image_root ...",
+   "summary": "Converts each downloaded scan from many DICOM slice files into one 3D NIfTI file, after checking that the scan ID and the slice geometry are consistent.",
+   "purpose": "Produce <image_root>/<SeriesInstanceUID>.nii.gz, the image format the pipeline reads.",
+   "inputs": [
+    {
+     "name": "DICOM series directories",
+     "description": "from the download stage"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "<image_root>/<SeriesInstanceUID>.nii.gz",
+     "description": "one 3D volume per MRI series (phase)"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "--backend",
+     "default": "nibabel",
+     "note": "or sitk"
+    },
+    {
+     "key": "--overwrite",
+     "default": "off"
+    }
+   ],
+   "libraries": [
+    "pydicom",
+    "nibabel",
+    "SimpleITK (optional backend)"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/prepare/cli.py",
+     "symbol": "_dicom_to_nifti",
+     "line": 46
+    },
+    {
+     "file": "src/mribreast/prepare/dicom_to_nifti.py",
+     "symbol": "convert_tree",
+     "line": 236
+    },
+    {
+     "file": "src/mribreast/prepare/dicom_to_nifti.py",
+     "symbol": "inspect_series",
+     "line": 100
+    }
+   ],
+   "details": [
+    "Raises SeriesUidMismatch / GeometryError instead of writing a doubtful volume.",
+    "Matches the legacy SimpleITK path on synthetic oblique series: voxels exact, affine within 1e-4 mm (docs/acceptance.md)."
+   ],
+   "example": "PLACEHOLDER: nifti/PLACEHOLDER-SERIES-UID.nii.gz",
+   "uncertain": [
+    "Tested on synthetic series only; enhanced / multi-frame MR (if present in Duke) has not been tried."
+   ]
+  },
+  {
+   "id": "segment_mri_core",
+   "name": "Lesion masks (MRI-CORE/SAM)",
+   "lane": "prep",
+   "col": 0,
+   "row": 3,
+   "kind": "optional",
+   "command": "python -m mribreast prepare-data segment-mri-core --clinical_features_file ... --metadata_file ... --annotation_boxes_file ... --image_root ... --mri_foundation_repo ... --output_dir ...",
+   "summary": "Uses a pretrained segmentation model (MRI-CORE, based on SAM) to draw a lesion outline inside each radiologist's bounding box. The result is a mask file per study that the image model can later use to focus on the tumour.",
+   "purpose": "Box-prompted lesion segmentation -> mask manifest for mask_provider=local_files.",
+   "inputs": [
+    {
+     "name": "Cohort",
+     "description": "built from clinical + metadata tables (same DukeCohortSource as training), or --cohort_csv"
+    },
+    {
+     "name": "Annotation_Boxes.xlsx",
+     "description": "Duke lesion bounding boxes (zero-based, inclusive)"
+    },
+    {
+     "name": "NIfTI volumes",
+     "description": "image_root"
+    },
+    {
+     "name": "mri_foundation checkout + weights",
+     "description": "external, read-only (MRI_FOUNDATION_REPO)"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "masks/<study_id>.nii.gz",
+     "description": "uint8 {0 background, 1 lesion} on the first series' grid"
+    },
+    {
+     "name": "mask_manifest.csv",
+     "description": "LocalFileMaskProvider format + prompt_source=annotation_box"
+    },
+    {
+     "name": "segmentation_qc.csv, annotation_coverage.csv, segmentation_manifest.json, COMPLETE",
+     "description": "QC and provenance"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "--weights",
+     "default": "mri_core",
+     "note": "mri_core | sam | state_dict"
+    },
+    {
+     "key": "--input",
+     "default": "post_minus_pre:1",
+     "note": "first post-contrast minus pre-contrast"
+    },
+    {
+     "key": "--context",
+     "default": "3.0",
+     "note": "window side / longest box side"
+    },
+    {
+     "key": "--min_window",
+     "default": "64"
+    },
+    {
+     "key": "--threshold",
+     "default": "0.0",
+     "note": "logit threshold"
+    },
+    {
+     "key": "--mask_output",
+     "default": "best_iou"
+    },
+    {
+     "key": "clip_to_box / --box_margin",
+     "default": "on / 0.1"
+    },
+    {
+     "key": "--slice_margin",
+     "default": "0"
+    }
+   ],
+   "libraries": [
+    "torch",
+    "torchvision",
+    "einops",
+    "nibabel",
+    "mri_foundation (external)"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/prepare/cli.py",
+     "symbol": "_segment",
+     "line": 142
+    },
+    {
+     "file": "src/mribreast/prepare/segmentation/pipeline.py",
+     "symbol": "run_nifti",
+     "line": 326
+    },
+    {
+     "file": "src/mribreast/prepare/segmentation/pipeline.py",
+     "symbol": "segment_volume",
+     "line": 162
+    },
+    {
+     "file": "src/mribreast/prepare/segmentation/mri_core.py",
+     "symbol": "MRI-CORE loader"
+    }
+   ],
+   "details": [
+    "Per slice: square context window around the box, percentile clipping [0.5, 99.5], min-max to uint8, 3 channels, resize to 1024^2, ImageNet normalisation, box prompt, 3 masks, choose best IoU, threshold logits, paste back, clip to box +- margin.",
+    "Resumable: a study is skipped when its sidecar settings_fingerprint matches; files published with os.replace; manifest and COMPLETE written last.",
+    "Never use the repo's num_cls=1 setup zero-shot (random mask tokens); the project's own loader reproduces the num_cls=3 build.",
+    "Masks only exist where a Duke box exists, so a classifier using them needs the box at inference (requires_box_at_inference=true)."
+   ],
+   "example": "PLACEHOLDER: masks/PLACEHOLDER-STUDY-001.nii.gz, coverage 'eligible'",
+   "uncertain": [
+    "Not verified on any real Duke slice: mask quality and the box axis convention of the prompts are unchecked (docs/acceptance.md §4b).",
+    "Zero-shot quality measured on toy 2D images only; MRI-CORE pretraining overlap with Duke unknown."
+   ]
+  },
+  {
+   "id": "controller",
+   "name": "Experiment controller",
+   "lane": "orchestrate",
+   "col": 1,
+   "row": 0,
+   "kind": "core",
+   "command": "bash run_experiment.sh --train [--local] [--dry-run] [--show-config] [--config experiment.conf]",
+   "summary": "Reads the experiment settings file, expands the grid of settings to try (for example 3 network types x 2 feature sets x 2 tabular models x 2 loss weights = 24 runs), and launches one job per combination, either on the Slurm cluster or one after another on this computer.",
+   "purpose": "Turn experiment.conf + fields.tsv into one exact Python command line per grid row, frozen in a snapshot.",
+   "inputs": [
+    {
+     "name": "experiment.conf / configs/*.conf",
+     "description": "PATHS, TRAIN, TRAIN_GRID, VALIDATE, VALIDATE_GRID, SUMMARIZE, JOB_* resources"
+    },
+    {
+     "name": "fields.tsv",
+     "description": "allowed keys, types and choices"
+    },
+    {
+     "name": "Prepared input files",
+     "description": "workbooks, NIfTI directory, optional mask manifest (referenced in PATHS)"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "argv per task",
+     "description": "python -m mribreast <stage> --key value ... (identical for Slurm and --local)"
+    },
+    {
+     "name": "<slurm_logs>/run-<stage>-<timestamp>/",
+     "description": "read-only snapshot: resolved config, controller copy, fields.tsv, code_version.txt"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "--train | --validate | --summarize | --prepare",
+     "default": "-",
+     "note": "stage to launch"
+    },
+    {
+     "key": "--local",
+     "default": "off",
+     "note": "run tasks here instead of sbatch"
+    },
+    {
+     "key": "--dependency",
+     "default": "-",
+     "note": "e.g. afterok:<job id>"
+    },
+    {
+     "key": "MAX_JOBS",
+     "default": "0",
+     "note": "0 = full grid"
+    },
+    {
+     "key": "MAX_CONCURRENT",
+     "default": "4",
+     "note": "array throttle"
+    },
+    {
+     "key": "TRAIN_GRID",
+     "default": "24 rows in experiment.conf",
+     "note": "mri_model x feature_groups x feature_model x sensitivity_lambda"
+    },
+    {
+     "key": "VALIDATE_GRID[fusion_alpha]",
+     "default": "0.5"
+    }
+   ],
+   "libraries": [
+    "Bash 4.3+",
+    "Slurm sbatch (cluster)",
+    "Git Bash on Windows"
+   ],
+   "source": [
+    {
+     "file": "run_experiment.sh",
+     "symbol": "thin launcher (exec run_experiment.slurm)",
+     "line": 3
+    },
+    {
+     "file": "run_experiment.slurm",
+     "symbol": "parse_grid",
+     "line": 332
+    },
+    {
+     "file": "run_experiment.slurm",
+     "symbol": "build_command",
+     "line": 484
+    },
+    {
+     "file": "run_experiment.slurm",
+     "symbol": "run_task",
+     "line": 596
+    },
+    {
+     "file": "experiment.conf",
+     "symbol": "TRAIN / TRAIN_GRID / VALIDATE_GRID"
+    }
+   ],
+   "details": [
+    "Grid keys are sorted; the last sorted key varies fastest (legacy select_grid). Verified identical to the reference controller for all 24 rows.",
+    "Validation task i = training row i / |VALIDATE_GRID|, validation row i % |VALIDATE_GRID| (24 tasks for one alpha, 72 for three).",
+    "The controller never computes train_id / eval_id; Python is authoritative.",
+    "Stages are chained with --dependency afterok:<id> on Slurm (train -> validate -> summarize)."
+   ],
+   "loop": "One task per grid row (train, validate) or one task (summarize).",
+   "example": "PLACEHOLDER task: python -m mribreast train --mri_model resnet10 --feature_model xgboost --sensitivity_lambda 0.05 ...",
+   "uncertain": [
+    "Helios GH200 runtime (sbatch, module load ML-bundle, real flock, ARM venv bootstrap) has not been exercised (docs/acceptance.md §5)."
+   ]
+  },
+  {
+   "id": "resolve_config",
+   "name": "Resolve config & IDs",
+   "lane": "orchestrate",
+   "col": 1,
+   "row": 1,
+   "kind": "core",
+   "command": "python -m mribreast <stage> --key value ...  (cli._resolve_cfg)",
+   "summary": "Checks every setting against the registry, rejects combinations that do not make sense, confirms the input files exist, and computes short IDs (train_id, eval_id) that uniquely name this exact experiment, so results are never mixed up.",
+   "purpose": "Typed, validated configuration plus deterministic identities for artifacts.",
+   "inputs": [
+    {
+     "name": "argv",
+     "description": "--<key> <value> for every key in fields.tsv (or --config_json)"
+    },
+    {
+     "name": "Input files",
+     "description": "content fingerprints of identity paths that this mode needs"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "Resolved cfg",
+     "description": "typed dict, paths made absolute"
+    },
+    {
+     "name": "train_id",
+     "description": "\"tr-\" + sha256(train identity)[:12]"
+    },
+    {
+     "name": "eval_id",
+     "description": "\"ev-a<alpha>-\" + sha256(validate identity)[:8]"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "fields.tsv identity column",
+     "default": "1/0",
+     "note": "parallelism, output/cache roots and experiment_id are excluded from identity"
+    },
+    {
+     "key": "BOX_IDENTITY_FIELDS",
+     "default": "-",
+     "note": "enter the identity only when box_mode != none (keeps old train_ids stable)"
+    }
+   ],
+   "libraries": [
+    "argparse",
+    "hashlib",
+    "json"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "_resolve_cfg",
+     "line": 26
+    },
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "required_inputs",
+     "line": 50
+    },
+    {
+     "file": "src/mribreast/config/schema.py",
+     "symbol": "resolve",
+     "line": 189
+    },
+    {
+     "file": "src/mribreast/config/schema.py",
+     "symbol": "validate_combinations",
+     "line": 214
+    },
+    {
+     "file": "src/mribreast/config/schema.py",
+     "symbol": "train_id",
+     "line": 357
+    },
+    {
+     "file": "src/mribreast/config/schema.py",
+     "symbol": "eval_id",
+     "line": 369
+    }
+   ],
+   "details": [
+    "Runs at the start of every Python stage: prepare, train and validate each resolve the config, build the cohort and recompute train_id independently.",
+    "Lesion location comes from exactly one source: external masks (mask_mode), Duke boxes as model input (box_mode, 3D only), or mask-based 2D slice selection. Combinations are rejected in validate_combinations.",
+    "required_inputs lists which path keys this mode actually needs (e.g. annotation_boxes_file only with boxes)."
+   ],
+   "example": "PLACEHOLDER: train_id=tr-000000000000, eval_id=ev-a0.5-00000000",
+   "uncertain": []
+  },
+  {
+   "id": "prepare_audit",
+   "name": "Prepare: audit & cache warm-up",
+   "lane": "orchestrate",
+   "col": 1,
+   "row": 2,
+   "kind": "optional",
+   "command": "bash run_experiment.sh --prepare  |  python -m mribreast prepare ...",
+   "summary": "An optional dry run before training: it builds the patient list, writes reports of who was included or excluded and why, and pre-computes the resized images so training does not have to.",
+   "purpose": "Cohort audit + deterministic image-cache warm-up, no training.",
+   "inputs": [
+    {
+     "name": "Resolved cfg",
+     "description": "same as train"
+    },
+    {
+     "name": "Input workbooks and images",
+     "description": "via PATHS"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "<checkpoint_root>/_prepare/<train_id>/",
+     "description": "cohort.csv (no oncotype_score), cohort_audit.csv, mask/box audits, prepare_manifest.json"
+    },
+    {
+     "name": "Warm cache",
+     "description": "prepared_root / subtraction_root entries reused by training"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "prepared_root",
+     "default": "runs/duke/prepared"
+    },
+    {
+     "key": "subtraction_root",
+     "default": "runs/duke/prepared_subtraction"
+    }
+   ],
+   "libraries": [
+    "pandas",
+    "nibabel",
+    "torch"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "cmd_prepare",
+     "line": 124
+    },
+    {
+     "file": "src/mribreast/imaging/cache.py",
+     "symbol": "VolumeCache",
+     "line": 143
+    }
+   ],
+   "details": [
+    "Cache key = sha256 of {cache schema, source UIDs + file fingerprints, target_size, normalisation, resize backend}; writers take an exclusive lock and publish with os.replace.",
+    "Augmentations are never cached."
+   ],
+   "example": "PLACEHOLDER: cohort_audit.csv row -> PLACEHOLDER-P007, reason 'fewer_than_2_unique_series'",
+   "uncertain": []
+  },
+  {
+   "id": "build_cohort",
+   "name": "Build cohort & labels",
+   "lane": "train",
+   "col": 2,
+   "row": 0,
+   "kind": "core",
+   "command": "cli.build_cohort -> DukeCohortSource.load",
+   "summary": "Reads the clinical spreadsheet and the scan list, keeps patients that have an Oncotype score, turns the score into a label (low risk 0 / high risk 1), and picks which MRI series (contrast phases) belong to each study.",
+   "purpose": "One row per study: patient_id, study_id, label, ordered series_uids (+ audit of every exclusion).",
+   "inputs": [
+    {
+     "name": "Clinical_and_Other_Features.xlsx",
+     "description": "sheet 'Data', 3 header rows"
+    },
+    {
+     "name": "NBIA metadata digest",
+     "description": "sheet 'Metadata': Patient ID, Study/Series Instance UID, Series Description"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CohortTable.frame",
+     "description": "patient_id, study_id, label, series_uids"
+    },
+    {
+     "name": "CohortTable.audit",
+     "description": "included / excluded studies with reasons"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "profile",
+     "default": "duke_legacy_3d",
+     "note": "or general"
+    },
+    {
+     "key": "label_scheme",
+     "default": "oncotype_binary_18",
+     "note": "or oncotype_3class_18_31"
+    },
+    {
+     "key": "phase_count",
+     "default": "5"
+    },
+    {
+     "key": "phase_order",
+     "default": "metadata",
+     "note": "explicit requires profile=general"
+    },
+    {
+     "key": "positive_class",
+     "default": "1"
+    }
+   ],
+   "libraries": [
+    "pandas",
+    "openpyxl"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "build_cohort",
+     "line": 80
+    },
+    {
+     "file": "src/mribreast/data/duke.py",
+     "symbol": "DukeCohortSource.load",
+     "line": 424
+    },
+    {
+     "file": "src/mribreast/data/duke.py",
+     "symbol": "select_studies_legacy",
+     "line": 253
+    },
+    {
+     "file": "src/mribreast/data/duke.py",
+     "symbol": "select_studies_general",
+     "line": 286
+    }
+   ],
+   "details": [
+    "duke_legacy_3d: series = the first phase_count series of each study in metadata row order (bit-compatible with the legacy repo).",
+    "general: phases parsed from series descriptions; requires pre-contrast + consecutive post-contrast phases, otherwise the study is excluded with a reason.",
+    "Final inner join with the clinical table; oncotype_score is dropped before anything is written."
+   ],
+   "example": "PLACEHOLDER row: patient_id=PLACEHOLDER-P001, study_id=PLACEHOLDER-S001, label=1, series_uids=UID-A|UID-B|UID-C|UID-D|UID-E",
+   "uncertain": [
+    "The NBIA digest is not in either repository; its column names are inferred from legacy code, and its row order defines legacy phase selection (docs/acceptance.md §5).",
+    "No training or evaluation has been run on real Duke data."
+   ]
+  },
+  {
+   "id": "tabular_features",
+   "name": "Attach tabular features",
+   "lane": "train",
+   "col": 2,
+   "row": 1,
+   "kind": "core",
+   "command": "data/duke.py add_tabular_groups (only when 'tabular' in branches)",
+   "summary": "Adds the non-image information for each study: clinical facts (e.g. age, tumour characteristics) and, optionally, numeric features already computed from the images. A safety check makes sure nothing that reveals the answer is used as an input.",
+   "purpose": "Join the configured feature groups and enforce the allowed-predictor policy.",
+   "inputs": [
+    {
+     "name": "Cohort frame",
+     "description": "from the previous stage"
+    },
+    {
+     "name": "Imaging_Features.xlsx",
+     "description": "kinetic / morphology / heterogeneity groups (optional)"
+    },
+    {
+     "name": "Density workbook",
+     "description": "radiologist density (optional group)"
+    },
+    {
+     "name": "allowed_predictors_v1.json",
+     "description": "packaged predictor policy"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "Cohort frame + predictor columns",
+     "description": "continuous_columns and categorical_columns lists"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "feature_groups",
+     "default": "clinical",
+     "note": "clinical|kinetic|morphology|heterogeneity|density"
+    },
+    {
+     "key": "include_sensitive",
+     "default": "false",
+     "note": "race_ethnicity excluded by default"
+    },
+    {
+     "key": "imaging_patient_id_column",
+     "default": "Patient ID"
+    },
+    {
+     "key": "allow_missing_imaging_features",
+     "default": "false"
+    }
+   ],
+   "libraries": [
+    "pandas"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/data/duke.py",
+     "symbol": "add_tabular_groups",
+     "line": 376
+    },
+    {
+     "file": "src/mribreast/data/imaging_features.py",
+     "symbol": "merge_imaging_features",
+     "line": 110
+    },
+    {
+     "file": "src/mribreast/data/predictor_policy.py",
+     "symbol": "PredictorPolicy / check_label_leakage",
+     "line": 150
+    }
+   ],
+   "details": [
+    "Policy check is name-based (primary control) plus a data-based leakage check.",
+    "Density with <50% coverage adds a warning; missing values are imputed fold-locally later."
+   ],
+   "example": "PLACEHOLDER columns: age_at_diagnosis_years=PLACEHOLDER, tumor_grade=PLACEHOLDER",
+   "uncertain": [
+    "The data-based label-leak check catches only exact copies of the score (documented limitation, docs/acceptance.md §4)."
+   ]
+  },
+  {
+   "id": "split_plan",
+   "name": "Patient-grouped split plan",
+   "lane": "train",
+   "col": 2,
+   "row": 2,
+   "kind": "core",
+   "command": "protocol/train.py run_training -> splits.make_split_plan",
+   "summary": "Divides patients into 5 groups (folds). Each fold in turn is held out for testing while the model learns on the others; the learning part is split again to keep some patients aside for choosing the best model and the decision cut-off. All scans of one patient always stay in the same group, so the model is never tested on someone it has seen.",
+   "purpose": "Frozen nested-CV plan with roles fit / calibration (or selection + threshold) / outer_eval, and the train manifest.",
+   "inputs": [
+    {
+     "name": "Cohort frame",
+     "description": "labels + patient_id groups, in cohort order"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "split_manifest.csv",
+     "description": "fold, patient_id, study_id, label, role, inner-fold metadata; its sha256 = split_hash"
+    },
+    {
+     "name": "train_manifest.json",
+     "description": "ids, resolved config, input + cohort fingerprints, split_hash, versions"
+    },
+    {
+     "name": "cohort.csv, cohort_audit.csv",
+     "description": "written into <checkpoint_root>/<train_id>/"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "num_folds",
+     "default": "5"
+    },
+    {
+     "key": "threshold_calibration_folds",
+     "default": "5",
+     "note": "first inner fold is held out as calibration"
+    },
+    {
+     "key": "seed",
+     "default": "42",
+     "note": "outer seed; inner seed = seed + fold"
+    },
+    {
+     "key": "selection_split",
+     "default": "shared",
+     "note": "shared | separate | outer"
+    }
+   ],
+   "libraries": [
+    "scikit-learn StratifiedGroupKFold",
+    "numpy",
+    "pandas"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/protocol/train.py",
+     "symbol": "run_training",
+     "line": 108
+    },
+    {
+     "file": "src/mribreast/protocol/splits.py",
+     "symbol": "make_split_plan",
+     "line": 140
+    },
+    {
+     "file": "src/mribreast/protocol/splits.py",
+     "symbol": "make_inner_calibration_split",
+     "line": 49
+    },
+    {
+     "file": "src/mribreast/protocol/splits.py",
+     "symbol": "validate_split_plan",
+     "line": 205
+    }
+   ],
+   "details": [
+    "shared (legacy fusion): calibration patients pick the checkpoint AND tune thresholds.",
+    "separate: calibration patients are split again (seed + fold + 1000) into selection and threshold.",
+    "outer (historical image-only): the outer fold selects the checkpoint and is evaluated - optimistic, flagged as selection_uses_outer_eval.",
+    "Frozen: an existing split_manifest.csv is reused and verified, never regenerated. An existing train dir with different identity raises ArtifactMismatch.",
+    "Leakage checks live in tests/review/test_review_splits_leakage.py."
+   ],
+   "example": "PLACEHOLDER: fold 1 -> fit: 60% of patients, calibration: 20%, outer_eval: 20%",
+   "uncertain": []
+  },
+  {
+   "id": "image_preprocess",
+   "name": "Image loading & preprocessing",
+   "lane": "train",
+   "col": 3,
+   "row": 0,
+   "kind": "core",
+   "command": "models/image_branch.py ImageBranch.fit -> ItemBuilder.build + ImageDataset",
+   "summary": "Loads the MRI phases of each study, normalises their brightness, resizes them to a fixed size and stacks them as channels. Depending on the settings it can also crop to the tumour, add a mask channel, or cut 2D slices. During training it randomly blanks a patch of background as data augmentation.",
+   "purpose": "Turn studies into model-ready tensors [C, D, H, W] (3D) or [C, H, W] (2D items).",
+   "inputs": [
+    {
+     "name": "fit + selection rows of this fold",
+     "description": "from the split plan"
+    },
+    {
+     "name": "NIfTI volumes or 2D image manifest",
+     "description": "image_root / image_manifest_file"
+    },
+    {
+     "name": "Masks or annotation boxes (optional)",
+     "description": "mask_manifest_file / annotation_boxes_file"
+    },
+    {
+     "name": "Deterministic cache",
+     "description": "prepared_root, subtraction_root"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "ItemTable + ImageDataset",
+     "description": "(x, y, study_index) items; dual_stream yields (global, local)"
+    },
+    {
+     "name": "Audits",
+     "description": "annotation_coverage.csv, mask_audit_fit.csv, box_audit.csv"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "image_dim / image_source",
+     "default": "3d / nifti",
+     "note": "2d with nifti slices or manifest_2d"
+    },
+    {
+     "key": "target_size",
+     "default": "256 256 64"
+    },
+    {
+     "key": "subtraction_mode",
+     "default": "none",
+     "note": "post_minus_pre | consecutive"
+    },
+    {
+     "key": "mask_mode",
+     "default": "none",
+     "note": "roi_crop | mask_channel | foreground_only"
+    },
+    {
+     "key": "box_mode",
+     "default": "none",
+     "note": "roi_crop | box_channel | dual_stream (3D only)"
+    },
+    {
+     "key": "use_annotation_boxes",
+     "default": "false (true in experiment.conf)",
+     "note": "background erasing augmentation"
+    },
+    {
+     "key": "slice_selection / slices_per_study",
+     "default": "center / 1",
+     "note": "2D only"
+    }
+   ],
+   "libraries": [
+    "nibabel",
+    "torch (interpolate)",
+    "monai",
+    "filelock",
+    "pillow",
+    "tifffile"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/imaging/datasets.py",
+     "symbol": "ItemBuilder",
+     "line": 72
+    },
+    {
+     "file": "src/mribreast/imaging/datasets.py",
+     "symbol": "ImageDataset",
+     "line": 249
+    },
+    {
+     "file": "src/mribreast/imaging/loader.py",
+     "symbol": "StudyVolumeLoader",
+     "line": 27
+    },
+    {
+     "file": "src/mribreast/imaging/volume.py",
+     "symbol": "prepare_phase / prepare_difference",
+     "line": 135
+    },
+    {
+     "file": "src/mribreast/imaging/masks/policies.py",
+     "symbol": "resolve_mask / apply_mask_mode",
+     "line": 91
+    },
+    {
+     "file": "src/mribreast/imaging/boxes/policies.py",
+     "symbol": "decide_boxes",
+     "line": 57
+    },
+    {
+     "file": "src/mribreast/imaging/annotations.py",
+     "symbol": "erase_background_box",
+     "line": 143
+    }
+   ],
+   "details": [
+    "subtraction_mode=none: load -> z-score whole volume (population std, no epsilon) -> trilinear resize (align_corners=False). Normalisation before resize, as in legacy MONAI.",
+    "Subtraction: verify same grid -> resize raw phases -> minuend - subtrahend -> z-score with +1e-5. Channels: phase_count (5) or phase_count - 1 (4); +1 for mask_channel.",
+    "Crops (mask roi_crop, box roi_crop/dual_stream) are computed on the NATIVE grid before resizing, so small lesions are not lost.",
+    "Erasing: one background cuboid of side dim//4, up to 8 draws, rejected if it touches the lesion box; fit rows only; RNG = default_rng([seed, epoch, item]).",
+    "Mask policies (missing/empty/invalid): error | full_image | drop; every decision is audited."
+   ],
+   "example": "PLACEHOLDER tensor: 5 channels x 256 x 256 x 64 (one channel per contrast phase)",
+   "uncertain": [
+    "Annotation-box convention (0-based inclusive, column/row/slice -> array axes 0/1/2) is reproduced from legacy code only and has not been checked against real DICOM overlays. Treat box-based results as provisional (docs/imaging.md §4)."
+   ]
+  },
+  {
+   "id": "image_branch_fit",
+   "name": "Train image model",
+   "lane": "train",
+   "col": 3,
+   "row": 1,
+   "kind": "core",
+   "command": "ImageBranch.fit -> pytorch_lightning Trainer.fit(ImageClassifier)",
+   "summary": "Trains a 3D convolutional neural network (DenseNet or ResNet) to predict the risk label from the images. After each pass over the training patients it checks performance on the held-aside patients and keeps the best version.",
+   "purpose": "Fit the image branch on fit rows; pick the checkpoint by ROC-AUC on selection rows.",
+   "inputs": [
+    {
+     "name": "Train dataset (fit rows)",
+     "description": "with augmentation"
+    },
+    {
+     "name": "Validation dataset (selection rows)",
+     "description": "calibration (shared) or selection (separate)"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fold_<k>/image/best.ckpt, last.ckpt",
+     "description": "Lightning checkpoints"
+    },
+    {
+     "name": "image_branch.json",
+     "description": "network, imaging, mask/box settings, class weights, best epoch, counts"
+    },
+    {
+     "name": "history.csv",
+     "description": "per-epoch metrics"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "mri_model",
+     "default": "densenet121",
+     "note": "fcn | densenet121 | resnet10 | resnet18"
+    },
+    {
+     "key": "epoch",
+     "default": "30"
+    },
+    {
+     "key": "batch_size",
+     "default": "4"
+    },
+    {
+     "key": "lr",
+     "default": "1e-4"
+    },
+    {
+     "key": "optimizer",
+     "default": "adam",
+     "note": "or adamw"
+    },
+    {
+     "key": "loss",
+     "default": "ce_soft_sensitivity",
+     "note": "weighted CE + sensitivity_lambda * (1 - soft sensitivity)"
+    },
+    {
+     "key": "sensitivity_lambda",
+     "default": "0.05"
+    },
+    {
+     "key": "positive_boost",
+     "default": "1.0"
+    },
+    {
+     "key": "early_stopping",
+     "default": "false"
+    },
+    {
+     "key": "aggregation",
+     "default": "mean_prob",
+     "note": "study-level aggregation of item probabilities"
+    }
+   ],
+   "libraries": [
+    "torch",
+    "pytorch-lightning 2.5.6",
+    "monai 1.5.1 (DenseNet121, ResNet)",
+    "torchmetrics"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/models/image_branch.py",
+     "symbol": "ImageBranch.fit",
+     "line": 263
+    },
+    {
+     "file": "src/mribreast/models/classifier.py",
+     "symbol": "ImageClassifier",
+     "line": 88
+    },
+    {
+     "file": "src/mribreast/models/classifier.py",
+     "symbol": "compute_balanced_class_weights",
+     "line": 35
+    },
+    {
+     "file": "src/mribreast/models/networks.py",
+     "symbol": "make_network",
+     "line": 49
+    },
+    {
+     "file": "src/mribreast/models/dual_stream.py",
+     "symbol": "DualStreamNetwork",
+     "line": 21
+    }
+   ],
+   "details": [
+    "Class weights: total / (K * max(count, 1)), positive class multiplied by positive_boost.",
+    "ModelCheckpoint(monitor=val_auc_roc, mode=max, save_top_k=1, save_last=True). Metrics are computed per study.",
+    "Training loader is not shuffled (legacy); a trailing batch of exactly one sample is dropped (BatchNorm).",
+    "Probabilities use a float64 softmax to avoid artificial ROC-AUC ties."
+   ],
+   "example": "PLACEHOLDER: best epoch 12 of 30, val_auc_roc = PLACEHOLDER",
+   "uncertain": []
+  },
+  {
+   "id": "tabular_branch_fit",
+   "name": "Train tabular model",
+   "lane": "train",
+   "col": 2,
+   "row": 3,
+   "kind": "core",
+   "command": "TabularBranch.fit",
+   "summary": "Trains a classic machine-learning model (gradient-boosted trees or a small neural network) on the spreadsheet features. Missing values are filled in and, optionally, a LASSO step keeps only the most useful features.",
+   "purpose": "Fit preprocessor -> optional LASSO selector -> XGBoost or MLP on fit rows.",
+   "inputs": [
+    {
+     "name": "fit rows of this fold",
+     "description": "predictor columns + labels + patient groups"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fold_<k>/tabular/",
+     "description": "preprocessor.joblib, selector.joblib, model.joblib, feature_names.txt, selected_feature_names.txt, coefficients.csv, lasso_feature_selection.csv, tabular_branch.json, *.png"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "feature_model",
+     "default": "xgboost",
+     "note": "or mlp"
+    },
+    {
+     "key": "feature_selector",
+     "default": "none (lasso in experiment.conf)"
+    },
+    {
+     "key": "selector_preprocessing",
+     "default": "outer",
+     "note": "or fold_local"
+    },
+    {
+     "key": "lasso_cv_folds / lasso_cs",
+     "default": "5 / 20"
+    },
+    {
+     "key": "xgb_n_estimators / max_depth / learning_rate",
+     "default": "300 / 3 / 0.03"
+    },
+    {
+     "key": "mlp_hidden_layers / mlp_early_stopping",
+     "default": "128,64 / internal"
+    },
+    {
+     "key": "positive_boost",
+     "default": "1.0",
+     "note": "balanced sample weights"
+    }
+   ],
+   "libraries": [
+    "scikit-learn (SimpleImputer, StandardScaler, OneHotEncoder, LogisticRegressionCV l1/saga, MLPClassifier)",
+    "xgboost",
+    "joblib"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/tabular/branch.py",
+     "symbol": "TabularBranch.fit",
+     "line": 176
+    },
+    {
+     "file": "src/mribreast/tabular/preprocessing.py",
+     "symbol": "TabularPreprocessor",
+     "line": 33
+    },
+    {
+     "file": "src/mribreast/tabular/lasso.py",
+     "symbol": "LassoFeatureSelector",
+     "line": 75
+    },
+    {
+     "file": "src/mribreast/tabular/models.py",
+     "symbol": "make_tabular_model",
+     "line": 103
+    },
+    {
+     "file": "src/mribreast/tabular/models.py",
+     "symbol": "balanced_sample_weights",
+     "line": 31
+    }
+   ],
+   "details": [
+    "Continuous: median imputation + standardisation. Categorical: most-frequent imputation + one-hot (unknown categories ignored).",
+    "LASSO CV folds are grouped by patient; a minimum-feature fallback keeps at least lasso_min_features.",
+    "Selection rows are NOT used by the tabular branch (selection_rows_used=false).",
+    "duke_legacy_3d profile: every fold uses the global seed for XGBoost/MLP/LASSO (legacy behaviour)."
+   ],
+   "example": "PLACEHOLDER: LASSO kept 7 of 42 features in fold 1",
+   "uncertain": []
+  },
+  {
+   "id": "publish_fold",
+   "name": "Publish fold (resumable)",
+   "lane": "train",
+   "col": 3,
+   "row": 3,
+   "kind": "core",
+   "command": "run_training: atomic_dir(fold_<k>) + mark_complete",
+   "summary": "Saves everything learned in this fold in one go and marks it COMPLETE. If the job crashes, a restart skips finished folds and redoes only the unfinished one. After the last fold the whole training run is marked complete.",
+   "purpose": "Atomic, verifiable fold artifacts; loop to the next outer fold; finalise the training run.",
+   "inputs": [
+    {
+     "name": "Fitted image + tabular predictors",
+     "description": "saved into a staging directory"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fold_<k>/fold_manifest.json + COMPLETE",
+     "description": "role counts, inner-fold metadata, sha256 of every branch artifact"
+    },
+    {
+     "name": "lasso_feature_stability.csv/.png",
+     "description": "after all folds (tabular + LASSO)"
+    },
+    {
+     "name": "<checkpoint_root>/<train_id>/COMPLETE",
+     "description": "training run finished"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "checkpoint_root",
+     "default": "runs/duke/checkpoints"
+    }
+   ],
+   "libraries": [
+    "os.replace",
+    "hashlib",
+    "json"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/protocol/train.py",
+     "symbol": "run_training (fold loop)",
+     "line": 182
+    },
+    {
+     "file": "src/mribreast/artifacts/core.py",
+     "symbol": "atomic_dir",
+     "line": 146
+    },
+    {
+     "file": "src/mribreast/artifacts/core.py",
+     "symbol": "mark_complete",
+     "line": 139
+    },
+    {
+     "file": "src/mribreast/protocol/train.py",
+     "symbol": "aggregate_lasso_stability",
+     "line": 79
+    }
+   ],
+   "details": [
+    "Resume: a fold is skipped only if fold_k/COMPLETE exists and fold_manifest.json matches the current train_id and split_hash.",
+    "predictor.save must be idempotent and use relative paths because the staging directory is renamed on publish."
+   ],
+   "loop": "Repeats image preprocessing -> image fit -> tabular fit -> publish for each outer fold (default 5).",
+   "example": "PLACEHOLDER: runs/duke/checkpoints/tr-000000000000/fold_1/COMPLETE",
+   "uncertain": []
+  },
+  {
+   "id": "verify_artifacts",
+   "name": "Verify training artifacts",
+   "lane": "validate",
+   "col": 4,
+   "row": 0,
+   "kind": "core",
+   "command": "bash run_experiment.sh --validate  ->  python -m mribreast validate ... -> run_validation",
+   "summary": "Before scoring anything, validation recomputes the experiment ID and checks that the saved training run really belongs to this exact configuration, data and split. If anything differs it stops with an error instead of producing misleading numbers.",
+   "purpose": "Reject mismatched or incomplete training runs; load predictors per fold.",
+   "inputs": [
+    {
+     "name": "<checkpoint_root>/<train_id>/",
+     "description": "train_manifest.json, split_manifest.csv, fold_<k>/..."
+    },
+    {
+     "name": "Recomputed cfg, cohort, fingerprints",
+     "description": "validate re-runs config resolution and cohort building"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "Loaded predictors per fold",
+     "description": "image (best.ckpt) + tabular (joblib)"
+    },
+    {
+     "name": "Verified split plan",
+     "description": "roles per fold"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "validation_root",
+     "default": "runs/duke/validation"
+    },
+    {
+     "key": "validate_num_workers",
+     "default": "4"
+    }
+   ],
+   "libraries": [
+    "torch",
+    "joblib"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "cmd_validate",
+     "line": 166
+    },
+    {
+     "file": "src/mribreast/protocol/validate.py",
+     "symbol": "run_validation",
+     "line": 90
+    },
+    {
+     "file": "src/mribreast/protocol/manifests.py",
+     "symbol": "verify_train_manifest",
+     "line": 76
+    },
+    {
+     "file": "src/mribreast/protocol/manifests.py",
+     "symbol": "verify_fold",
+     "line": 100
+    }
+   ],
+   "details": [
+    "ArtifactMismatch when train_id, label definition, input fingerprints, cohort fingerprint or split hash differ.",
+    "Branch load() refuses artifacts trained with different geometry, channels, mask/box settings or class count.",
+    "An evaluation already marked COMPLETE with the same ids is returned unchanged."
+   ],
+   "example": "PLACEHOLDER: verified tr-000000000000, 5 folds",
+   "uncertain": []
+  },
+  {
+   "id": "predict_branches",
+   "name": "Predict each branch",
+   "lane": "validate",
+   "col": 4,
+   "row": 1,
+   "kind": "core",
+   "command": "run_validation -> _predict (threshold rows and outer_eval rows)",
+   "summary": "Each trained model gives a probability of high risk for two groups of patients: the held-aside patients used to choose the cut-off, and the held-out test patients of this fold. Studies that one model could not score are removed from all models so the comparison is fair.",
+   "purpose": "Per-branch class probabilities on threshold-role rows and outer_eval rows, same denominator for all branches.",
+   "inputs": [
+    {
+     "name": "Loaded predictors",
+     "description": "image + tabular for fold k"
+    },
+    {
+     "name": "threshold rows + outer_eval rows",
+     "description": "from the split plan"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "p_image, p_tabular",
+     "description": "[n, C] probability arrays aligned by study_id"
+    },
+    {
+     "name": "Excluded studies",
+     "description": "studies with NaN rows (e.g. mask policy drop)"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "report_unit",
+     "default": "study",
+     "note": "patient = average study probabilities per patient"
+    },
+    {
+     "key": "aggregation",
+     "default": "mean_prob",
+     "note": "image items -> study"
+    }
+   ],
+   "libraries": [
+    "torch",
+    "numpy",
+    "pandas"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/protocol/validate.py",
+     "symbol": "_predict",
+     "line": 61
+    },
+    {
+     "file": "src/mribreast/protocol/validate.py",
+     "symbol": "_units",
+     "line": 42
+    },
+    {
+     "file": "src/mribreast/imaging/datasets.py",
+     "symbol": "aggregate_study_probs",
+     "line": 434
+    }
+   ],
+   "details": [
+    "A study excluded by ANY branch is excluded from ALL branches and fusion; counts go to excluded_studies.csv.",
+    "Partially missing probability rows raise an error."
+   ],
+   "loop": "Runs once per outer fold.",
+   "example": "PLACEHOLDER: PLACEHOLDER-S013 -> p_image(high)=0.62, p_tabular(high)=0.48",
+   "uncertain": []
+  },
+  {
+   "id": "fusion",
+   "name": "Late fusion",
+   "lane": "validate",
+   "col": 4,
+   "row": 2,
+   "kind": "core",
+   "command": "fusion.fuse_aligned -> fuse_probabilities",
+   "summary": "Combines the two opinions into one with a weighted average: alpha times the image model's probability plus (1 - alpha) times the tabular model's probability. Trying a different alpha does not require retraining.",
+   "purpose": "p_fusion = alpha * p_image + (1 - alpha) * p_tabular, row-renormalised.",
+   "inputs": [
+    {
+     "name": "p_image, p_tabular",
+     "description": "aligned by study_id"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "p_fusion",
+     "description": "added as a third branch when both image and tabular exist"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "fusion_alpha",
+     "default": "0.5",
+     "note": "image weight; part of eval_id only"
+    }
+   ],
+   "libraries": [
+    "numpy"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/protocol/fusion.py",
+     "symbol": "fuse_probabilities",
+     "line": 68
+    },
+    {
+     "file": "src/mribreast/protocol/fusion.py",
+     "symbol": "fuse_aligned",
+     "line": 95
+    },
+    {
+     "file": "src/mribreast/protocol/fusion.py",
+     "symbol": "align_to_reference",
+     "line": 37
+    }
+   ],
+   "details": [
+    "alpha = 1 or 0 returns the single branch unchanged (avoids float noise changing ROC-AUC ties).",
+    "Alignment rejects missing, duplicate or unexpected studies and rows that are not distributions.",
+    "Skipped when only one branch is configured (branches=image or branches=tabular)."
+   ],
+   "example": "PLACEHOLDER: 0.5 * 0.62 + 0.5 * 0.48 = 0.55",
+   "uncertain": []
+  },
+  {
+   "id": "thresholds",
+   "name": "Tune decision thresholds",
+   "lane": "validate",
+   "col": 4,
+   "row": 3,
+   "kind": "core",
+   "command": "thresholds.tune_branch_thresholds (on threshold-role rows)",
+   "summary": "Chooses, for each model separately, the probability cut-off above which a patient is called 'high risk'. It picks the cut-off with the best balanced accuracy on the held-aside patients, never on the test patients (except in the documented 'outer' mode).",
+   "purpose": "One threshold per branch (image, tabular, fusion) per fold; decisions p[:, pos] >= t.",
+   "inputs": [
+    {
+     "name": "Probabilities on threshold rows",
+     "description": "calibration (shared) or threshold (separate)"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "Thresholds per branch",
+     "description": "-> decision_thresholds.json, threshold_calibration_metrics.csv"
+    },
+    {
+     "name": "Decisions",
+     "description": "0/1 per study on calibration and outer_eval rows"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "threshold_strategy",
+     "default": "balanced_accuracy",
+     "note": "or fixed_0.5"
+    },
+    {
+     "key": "positive_class",
+     "default": "1"
+    }
+   ],
+   "libraries": [
+    "numpy",
+    "scikit-learn metrics"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/protocol/thresholds.py",
+     "symbol": "tune_branch_thresholds",
+     "line": 89
+    },
+    {
+     "file": "src/mribreast/protocol/thresholds.py",
+     "symbol": "select_balanced_accuracy_threshold",
+     "line": 44
+    },
+    {
+     "file": "src/mribreast/protocol/thresholds.py",
+     "symbol": "decide",
+     "line": 75
+    }
+   ],
+   "details": [
+    "Candidates = unique({0, 0.5, 1} U scores); key = (balanced accuracy, sensitivity, -|t - 0.5|). Ported verbatim from legacy, locked by 400 tie-heavy test cases.",
+    "3-class label scheme: no threshold, argmax."
+   ],
+   "example": "PLACEHOLDER: fusion threshold fold 1 = 0.47",
+   "uncertain": []
+  },
+  {
+   "id": "metrics_report",
+   "name": "Metrics & evaluation report",
+   "lane": "validate",
+   "col": 4,
+   "row": 4,
+   "kind": "core",
+   "command": "tables.branch_metrics, plots, report.validation_report, atomic_dir(eval dir)",
+   "summary": "Measures how well each model did on the test patients of every fold (accuracy, balanced accuracy, sensitivity, specificity, ROC-AUC), pools all folds together, draws ROC curves and confusion matrices, and writes a readable report.",
+   "purpose": "Per-fold and pooled metrics; publish <validation_root>/<train_id>/<eval_id>/ with COMPLETE.",
+   "inputs": [
+    {
+     "name": "outer_eval probabilities + decisions",
+     "description": "all branches, all folds"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "validation_metrics.csv",
+     "description": "one row per fold, columns <branch>_<metric>"
+    },
+    {
+     "name": "validation_summary.csv, branch_comparison.csv",
+     "description": "mean, std, pooled"
+    },
+    {
+     "name": "predictions_calibration.csv, predictions_validation.csv",
+     "description": "long format over branches"
+    },
+    {
+     "name": "evaluation_manifest.json, decision_thresholds.json, confusion_matrices.json",
+     "description": "provenance and decisions"
+    },
+    {
+     "name": "roc_<branch>.png, confusion_<branch>.png, validation_report.md, COMPLETE",
+     "description": "charts and report"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "primary_branch",
+     "default": "auto",
+     "note": "fusion when both branches exist"
+    }
+   ],
+   "libraries": [
+    "scikit-learn metrics",
+    "matplotlib",
+    "pandas"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/protocol/validate.py",
+     "symbol": "run_validation (publish block)",
+     "line": 274
+    },
+    {
+     "file": "src/mribreast/reporting/tables.py",
+     "symbol": "branch_metrics",
+     "line": 32
+    },
+    {
+     "file": "src/mribreast/reporting/report.py",
+     "symbol": "validation_report",
+     "line": 48
+    },
+    {
+     "file": "src/mribreast/reporting/plots.py",
+     "symbol": "save_roc / save_confusion"
+    }
+   ],
+   "details": [
+    "Pooled confusion matrix concatenates per-fold decisions, each made with that fold's own threshold; pooled ROC-AUC uses concatenated probabilities.",
+    "evaluation_manifest.json records selection_uses_outer_eval / threshold_uses_outer_eval."
+   ],
+   "loop": "Fold metrics are gathered in the fold loop; pooled outputs are written once after the last fold.",
+   "example": "PLACEHOLDER: fusion_auc_roc fold 1 = PLACEHOLDER (synthetic run)",
+   "uncertain": []
+  },
+  {
+   "id": "summarize",
+   "name": "Summarize & rank",
+   "lane": "summarize",
+   "col": 5,
+   "row": 4,
+   "kind": "core",
+   "command": "bash run_experiment.sh --summarize  ->  python -m mribreast summarize ... -> reporting.summarize.summarize",
+   "summary": "Collects the results of every experiment, averages them over folds, and ranks the configurations by ROC-AUC, then balanced accuracy, sensitivity and specificity of the main (usually fused) model. It points out the best one but warns that choosing it this way is itself a form of selection.",
+   "purpose": "Aggregate all evaluations, rank configurations, write the summary directory.",
+   "inputs": [
+    {
+     "name": "<validation_root>/*/*/",
+     "description": "validation_metrics.csv, validation_config.json, evaluation_manifest.json, COMPLETE"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "all_validation_metrics.csv, configuration_summary.csv, ranked_configurations.csv",
+     "description": "legacy-compatible tables"
+    },
+    {
+     "name": "best_configuration.json",
+     "description": "top-ranked run"
+    },
+    {
+     "name": "validation_report.md, fusion_metric_comparison.png, branch_auc_comparison.png",
+     "description": "summary report and charts"
+    }
+   ],
+   "parameters": [
+    {
+     "key": "expected_folds",
+     "default": "5"
+    },
+    {
+     "key": "top_n",
+     "default": "20"
+    },
+    {
+     "key": "include_incomplete",
+     "default": "false"
+    },
+    {
+     "key": "summary_root",
+     "default": "runs/duke/validation/summary"
+    }
+   ],
+   "libraries": [
+    "pandas",
+    "matplotlib"
+   ],
+   "source": [
+    {
+     "file": "src/mribreast/cli.py",
+     "symbol": "cmd_summarize",
+     "line": 180
+    },
+    {
+     "file": "src/mribreast/reporting/summarize.py",
+     "symbol": "summarize",
+     "line": 201
+    },
+    {
+     "file": "src/mribreast/reporting/summarize.py",
+     "symbol": "collect_results",
+     "line": 97
+    },
+    {
+     "file": "src/mribreast/reporting/summarize.py",
+     "symbol": "rank_configurations",
+     "line": 173
+    }
+   ],
+   "details": [
+    "is_complete = folds 1..num_folds present AND a COMPLETE flag; incomplete runs are listed and warned about but not ranked by default.",
+    "Ranking columns primary_{auc_roc, balanced_accuracy, sensitivity, specificity}_mean; equal to the legacy fusion_* keys for fusion runs."
+   ],
+   "example": "PLACEHOLDER: rank 1 -> tr-000000000000/ev-a0.5-00000000",
+   "uncertain": [
+    "Ranking reuses the outer folds, so the best configuration's scores are optimistic; a generalisation claim needs an independent test set or an extra nesting level (stated in every validation_report.md)."
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from": "make_synthetic",
+   "to": "controller",
+   "label": "synthetic inputs (PATHS)",
+   "kind": "alternative"
+  },
+  {
+   "from": "nbia_download",
+   "to": "dicom_to_nifti",
+   "label": "DICOM series",
+   "kind": "optional"
+  },
+  {
+   "from": "dicom_to_nifti",
+   "to": "segment_mri_core",
+   "label": "NIfTI volumes",
+   "kind": "optional"
+  },
+  {
+   "from": "dicom_to_nifti",
+   "to": "controller",
+   "label": "image_root (NIfTI)",
+   "kind": "optional"
+  },
+  {
+   "from": "segment_mri_core",
+   "to": "controller",
+   "label": "mask_manifest.csv",
+   "kind": "optional"
+  },
+  {
+   "from": "controller",
+   "to": "resolve_config",
+   "label": "argv per grid row",
+   "kind": "data"
+  },
+  {
+   "from": "resolve_config",
+   "to": "prepare_audit",
+   "label": "resolved cfg",
+   "kind": "optional"
+  },
+  {
+   "from": "resolve_config",
+   "to": "build_cohort",
+   "label": "resolved cfg + train_id",
+   "kind": "data"
+  },
+  {
+   "from": "prepare_audit",
+   "to": "image_preprocess",
+   "label": "warm image cache",
+   "kind": "optional"
+  },
+  {
+   "from": "build_cohort",
+   "to": "tabular_features",
+   "label": "studies + labels",
+   "kind": "data"
+  },
+  {
+   "from": "tabular_features",
+   "to": "split_plan",
+   "label": "cohort frame",
+   "kind": "data"
+  },
+  {
+   "from": "split_plan",
+   "to": "image_preprocess",
+   "label": "fit / selection rows",
+   "kind": "data"
+  },
+  {
+   "from": "split_plan",
+   "to": "tabular_branch_fit",
+   "label": "fit rows",
+   "kind": "data"
+  },
+  {
+   "from": "image_preprocess",
+   "to": "image_branch_fit",
+   "label": "tensors [C,D,H,W]",
+   "kind": "data"
+  },
+  {
+   "from": "image_branch_fit",
+   "to": "publish_fold",
+   "label": "best.ckpt + meta",
+   "kind": "data"
+  },
+  {
+   "from": "tabular_branch_fit",
+   "to": "publish_fold",
+   "label": "joblib models",
+   "kind": "data"
+  },
+  {
+   "from": "publish_fold",
+   "to": "image_preprocess",
+   "label": "next outer fold",
+   "kind": "loop"
+  },
+  {
+   "from": "publish_fold",
+   "to": "verify_artifacts",
+   "label": "checkpoint_root/train_id",
+   "kind": "data"
+  },
+  {
+   "from": "verify_artifacts",
+   "to": "predict_branches",
+   "label": "loaded predictors",
+   "kind": "data"
+  },
+  {
+   "from": "predict_branches",
+   "to": "fusion",
+   "label": "p_image, p_tabular",
+   "kind": "data"
+  },
+  {
+   "from": "fusion",
+   "to": "thresholds",
+   "label": "probs incl. p_fusion",
+   "kind": "data"
+  },
+  {
+   "from": "thresholds",
+   "to": "metrics_report",
+   "label": "thresholds + decisions",
+   "kind": "data"
+  },
+  {
+   "from": "metrics_report",
+   "to": "predict_branches",
+   "label": "next outer fold",
+   "kind": "loop"
+  },
+  {
+   "from": "metrics_report",
+   "to": "summarize",
+   "label": "validation_root/train_id/eval_id",
+   "kind": "data"
+  }
+ ],
+ "playOrder": [
+  "make_synthetic",
+  "nbia_download",
+  "dicom_to_nifti",
+  "segment_mri_core",
+  "controller",
+  "resolve_config",
+  "prepare_audit",
+  "build_cohort",
+  "tabular_features",
+  "split_plan",
+  "image_preprocess",
+  "image_branch_fit",
+  "tabular_branch_fit",
+  "publish_fold",
+  "verify_artifacts",
+  "predict_branches",
+  "fusion",
+  "thresholds",
+  "metrics_report",
+  "summarize"
+ ],
+ "branchesAndOptions": [
+  {
+   "title": "Input source",
+   "text": "Real Duke data (download -> convert, optional MRI-CORE masks) OR make-synthetic. Both end up as file paths in experiment.conf PATHS."
+  },
+  {
+   "title": "Branches",
+   "text": "branches = image,tabular (default; fusion added automatically), image only, or tabular only. Fusion exists only when both branches are trained."
+  },
+  {
+   "title": "Image mode",
+   "text": "3D NIfTI (default), 2D slices cut from NIfTI, or ready 2D images (manifest_2d). Subtraction modes none | post_minus_pre | consecutive."
+  },
+  {
+   "title": "Lesion location (exactly one)",
+   "text": "external masks (mask_mode roi_crop | mask_channel | foreground_only), Duke boxes as model input (box_mode roi_crop | box_channel | dual_stream, 3D only), or mask-based 2D slice selection. use_annotation_boxes is a separate augmentation (background erasing)."
+  },
+  {
+   "title": "Selection split",
+   "text": "shared (calibration picks checkpoint and threshold), separate (selection vs threshold patients), outer (historical, optimistic: uses outer_eval)."
+  },
+  {
+   "title": "Loops",
+   "text": "Grid rows (controller) x outer folds (train and validate). Validation additionally loops over VALIDATE_GRID (e.g. several fusion_alpha) without retraining."
+  },
+  {
+   "title": "Resume",
+   "text": "Training skips folds with a matching COMPLETE flag; validation returns an existing COMPLETE evaluation; segmentation skips studies with a matching settings fingerprint."
+  }
+ ],
+ "sideTools": [
+  {
+   "name": "fields",
+   "command": "python -m mribreast fields [--stage train]",
+   "text": "Prints the field registry.",
+   "source": "src/mribreast/cli.py:222"
+  },
+  {
+   "name": "import-legacy",
+   "command": "python -m mribreast import-legacy --summary_dir ... --output_dir ...",
+   "text": "Normalises historical mri_brest results (run ids lg-<hash>/ev-a<alpha>-legacy) into a separate output_dir. Not part of the main flow.",
+   "source": "src/mribreast/legacy/importer.py:413"
+  },
+  {
+   "name": "mama-mia-download / mama-mia-map",
+   "command": "python -m mribreast prepare-data mama-mia-map ...",
+   "text": "Maps MAMA-MIA series UIDs onto Duke series/patients. Its masks are not yet imported into the pipeline.",
+   "source": "src/mribreast/prepare/mama_mia.py:104"
+  },
+  {
+   "name": "nifti-info",
+   "command": "python -m mribreast prepare-data nifti-info --image_root ...",
+   "text": "Lists the geometry of converted NIfTI files.",
+   "source": "src/mribreast/prepare/cli.py:60"
+  }
+ ],
+ "uncertainties": [
+  {
+   "stage": "build_cohort",
+   "text": "NBIA digest column names inferred from legacy code; no run on real Duke data."
+  },
+  {
+   "stage": "image_preprocess",
+   "text": "Annotation-box axis convention not verified against real overlays."
+  },
+  {
+   "stage": "segment_mri_core",
+   "text": "MRI-CORE masks not verified on real Duke slices."
+  },
+  {
+   "stage": "controller",
+   "text": "Helios/Slurm runtime not exercised."
+  },
+  {
+   "stage": "nbia_download",
+   "text": "TCIA download exercised only against fakes."
+  },
+  {
+   "stage": "dicom_to_nifti",
+   "text": "Only synthetic DICOM series tested."
+  },
+  {
+   "stage": "summarize",
+   "text": "Ranking on the outer folds is optimistic for the selected configuration."
+  },
+  {
+   "stage": "tabular_features",
+   "text": "Data-based label-leak check detects exact copies only."
+  }
+ ]
+};

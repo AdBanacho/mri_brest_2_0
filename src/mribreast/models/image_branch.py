@@ -358,6 +358,7 @@ class ImageBranch:
             finite = history.dropna(subset=["val_auc_roc"])
             if len(finite):
                 best_epoch = int(finite.loc[finite["val_auc_roc"].idxmax(), "epoch"])
+        provider_info = self.mask_provider.describe() if self.mask_provider is not None else None
         meta = {
             "schema_version": MANIFEST_SCHEMA_VERSION, "branch": "image", "fold": int(data.fold),
             "num_classes": self.num_classes,
@@ -379,7 +380,10 @@ class ImageBranch:
                      "roi_margin": s.roi_margin, "missing_policy": s.mask_missing_policy,
                      "empty_policy": s.mask_empty_policy, "invalid_policy": s.mask_invalid_policy,
                      "provenance": s.mask_provenance,
-                     "provider": self.mask_provider.describe() if self.mask_provider is not None else None},
+                     "provider": provider_info,
+                     # masks from a box-prompted segmenter exist only where a Duke box exists (docs/segmentation-mri-core.md)
+                     "requires_box_at_inference": bool(s.uses_masks and provider_info
+                                                       and provider_info.get("requires_box_at_inference"))},
             "annotation_boxes": {"enabled": s.use_annotation_boxes, "eligible_fit_studies": len(matched),
                                  "coverage": coverage_summary, "applies_to": "fit rows only"},
             "box": {"mode": s.box_mode, "margin": s.box_margin, "local_size": list(s.box_local_size),

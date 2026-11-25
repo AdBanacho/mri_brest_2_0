@@ -8,6 +8,8 @@ Commands (each reads inputs read-only and writes only below its output path):
 * ``nifti-info``     - geometry listing of converted files (legacy ``read_nifti_metadata_images``)
 * ``mama-mia-download`` - Synapse resource (legacy ``mama_mia/downloadMamamia.py``)
 * ``mama-mia-map``   - MAMA-MIA x Duke series mapping (legacy ``mama_mia/readFromXlmx.py``)
+* ``segment-mri-core`` - box-prompted lesion masks (MRI-CORE/SAM) + mask manifest (new;
+  docs/segmentation-mri-core.md; needs ``.[segment]`` and the read-only ``mri_foundation`` checkout)
 """
 
 from __future__ import annotations
@@ -94,6 +96,93 @@ def _mama_map(args: argparse.Namespace) -> int:
     return 0
 
 
+def make_segmenter(args: argparse.Namespace):
+    """Build the MRI-CORE/SAM segmenter (tests replace this with a fake)."""
+    from mribreast.prepare.segmentation.mri_core import MriCoreSegmenter
+
+    repo = Path(args.mri_foundation_repo)
+    weights_dir = repo / "pretrained_weights"
+    device = args.device
+    if device == "auto":
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return MriCoreSegmenter(repo, args.weights, sam_checkpoint=args.sam_checkpoint or weights_dir / "sam_vit_b_01ec64.pth",
+                            mri_core_checkpoint=args.mri_core_checkpoint or weights_dir / "mri_foundation.pth",
+                            checkpoint=args.checkpoint, device=device, batch_size=args.batch_size,
+                            mask_output=args.mask_output)
+
+
+def _cohort_from_tables(args: argparse.Namespace) -> tuple[pd.DataFrame, dict]:
+    """Studies built by the same cohort code as prepare/train (image branch only: no tabular filtering).
+
+    Needed because ``mribreast prepare`` with ``mask_provider=local_files`` already requires the mask manifest
+    that this command produces.
+    """
+    from mribreast.cli import build_cohort
+    from mribreast.config import schema
+
+    if not (args.clinical_features_file and args.metadata_file):
+        raise SystemExit("segment-mri-core: the cohort needs both --clinical_features_file and --metadata_file")
+    options = {}
+    for item in args.cohort_option:
+        key, sep, value = item.partition("=")
+        if not sep or key not in schema.FIELDS:
+            raise SystemExit(f"segment-mri-core: --cohort_option expects KEY=VALUE with a config key, got {item!r}")
+        options[key] = value
+    values = {"branches": "image", **options, "clinical_features_file": args.clinical_features_file,
+              "metadata_file": args.metadata_file, "image_root": args.image_root}
+    cfg = schema.resolve("prepare", values)
+    frame = build_cohort(cfg).frame
+    return frame, {"cohort_from": {"clinical_features_file": args.clinical_features_file,
+                                   "metadata_file": args.metadata_file, "options": options,
+                                   "profile": cfg["profile"], "n_studies": int(len(frame))}}
+
+
+def _segment(args: argparse.Namespace) -> int:
+    from mribreast.prepare.segmentation import pipeline
+
+    settings = pipeline.SegmentSettings(
+        input=args.input, input_channel=args.input_channel, slice_axis=args.slice_axis, slice_margin=args.slice_margin,
+        context=args.context, min_window=args.min_window, clip_percentiles=tuple(args.clip_percentiles),
+        threshold=args.threshold, clip_to_box=not args.no_clip_to_box, box_margin=args.box_margin,
+        training_provenance=args.training_provenance, known_overlap=args.known_overlap)
+    from_tables = bool(args.clinical_features_file or args.metadata_file)
+    if sum((bool(args.cohort_csv), from_tables, bool(args.image_manifest_file))) != 1:
+        raise SystemExit("segment-mri-core: give exactly one study source: --cohort_csv, "
+                         "--clinical_features_file + --metadata_file (cohort built as in the stages), "
+                         "or --image_manifest_file (ready 2D images)")
+    reference = None
+    if args.reference_mask_manifest:
+        from mribreast.imaging.masks.local import LocalFileMaskProvider
+
+        reference = LocalFileMaskProvider(args.reference_mask_manifest, slice_axis=args.slice_axis)
+    segmenter = make_segmenter(args)
+    common = dict(previews=args.previews, reference=reference, overwrite=args.overwrite)
+    if args.cohort_csv or from_tables:
+        if not (args.annotation_boxes_file and args.image_root):
+            raise SystemExit("segment-mri-core: NIfTI studies need --annotation_boxes_file and --image_root")
+        from mribreast.imaging.annotations import load_annotation_boxes
+
+        if args.cohort_csv:
+            studies = pd.read_csv(args.cohort_csv, dtype=str, keep_default_na=False)
+            source = {"cohort_csv": args.cohort_csv}
+        else:
+            studies, source = _cohort_from_tables(args)
+        if args.limit:
+            studies = studies.head(args.limit)
+        inputs = {**source, "annotation_boxes_file": args.annotation_boxes_file, "limit": args.limit,
+                  "reference_mask_manifest": args.reference_mask_manifest}
+        result = pipeline.run_nifti(studies, load_annotation_boxes(args.annotation_boxes_file), args.image_root,
+                                    segmenter, args.output_dir, settings, inputs=inputs, **common)
+    else:
+        result = pipeline.run_images_2d(args.image_manifest_file, segmenter, args.output_dir, settings,
+                                        inputs={"reference_mask_manifest": args.reference_mask_manifest}, **common)
+    print(json.dumps(result["summary"], indent=2, sort_keys=True))
+    print(f"segment-mri-core: mask manifest {Path(args.output_dir) / 'mask_manifest.csv'}")
+    return 1 if result["summary"]["n_errors"] else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     from mribreast.prepare import mama_mia, nbia
 
@@ -134,6 +223,46 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clinical_features_file", default=None)
     p.add_argument("--output_dir", required=True)
     p.set_defaults(func=_mama_map)
+
+    from mribreast.prepare.segmentation import pipeline as seg
+
+    d = seg.SegmentSettings()
+    p = sub.add_parser("segment-mri-core", help="box-prompted lesion masks (MRI-CORE/SAM) -> mask manifest",
+                       description="See docs/segmentation-mri-core.md. Output feeds mask_provider=local_files.")
+    p.add_argument("--cohort_csv", default=None, help="studies: patient_id, study_id, series_uids (cohort.csv)")
+    p.add_argument("--annotation_boxes_file", default=None, help="Duke Annotation_Boxes.xlsx (or CSV)")
+    p.add_argument("--image_root", default=None, help="directory of <SeriesInstanceUID>.nii.gz")
+    p.add_argument("--clinical_features_file", default=None, help="build the cohort as the stages do (with --metadata_file)")
+    p.add_argument("--metadata_file", default=None, help="NBIA digest (with --clinical_features_file)")
+    p.add_argument("--cohort_option", action="append", default=[], metavar="KEY=VALUE",
+                   help="cohort-defining config value, e.g. profile=general phase_order=explicit (repeatable)")
+    p.add_argument("--image_manifest_file", default=None, help="ready 2D images with a lesion_box column")
+    p.add_argument("--output_dir", required=True)
+    p.add_argument("--mri_foundation_repo", required=True, help="read-only mri_foundation checkout")
+    p.add_argument("--weights", choices=("mri_core", "sam", "state_dict"), default="mri_core")
+    p.add_argument("--sam_checkpoint", default=None, help="default <repo>/pretrained_weights/sam_vit_b_01ec64.pth")
+    p.add_argument("--mri_core_checkpoint", default=None, help="default <repo>/pretrained_weights/mri_foundation.pth")
+    p.add_argument("--checkpoint", default=None, help="full fine-tuned state dict (--weights state_dict)")
+    p.add_argument("--device", default="auto", help="auto | cpu | cuda | cuda:<n>")
+    p.add_argument("--batch_size", type=int, default=4, help="slices per encoder batch")
+    p.add_argument("--mask_output", choices=("best_iou", "0", "1", "2"), default="best_iou")
+    p.add_argument("--input", default=d.input, help="post_minus_pre:<k> | phase:<k> (phase 0 = pre-contrast)")
+    p.add_argument("--input_channel", type=int, default=d.input_channel, help="ready 2D images: channel to segment")
+    p.add_argument("--slice_axis", type=int, default=d.slice_axis)
+    p.add_argument("--slice_margin", type=int, default=d.slice_margin, help="extra slices beyond the box per side")
+    p.add_argument("--context", type=float, default=d.context, help="window side / longest box side")
+    p.add_argument("--min_window", type=int, default=d.min_window, help="minimum window side (pixels)")
+    p.add_argument("--clip_percentiles", type=float, nargs=2, default=list(d.clip_percentiles))
+    p.add_argument("--threshold", type=float, default=d.threshold, help="logit threshold")
+    p.add_argument("--no_clip_to_box", action="store_true", help="keep mask voxels outside box +- box_margin")
+    p.add_argument("--box_margin", type=float, default=d.box_margin)
+    p.add_argument("--training_provenance", choices=("frozen_external", "unknown"), default=d.training_provenance)
+    p.add_argument("--known_overlap", default=d.known_overlap)
+    p.add_argument("--reference_mask_manifest", default=None, help="mask manifest of reference masks (Dice/IoU QC)")
+    p.add_argument("--previews", type=int, default=0, help="overlay PNGs for the first N segmented items")
+    p.add_argument("--limit", type=int, default=0, help="first N cohort rows only (smoke runs)")
+    p.add_argument("--overwrite", action="store_true", help="replace outputs made with different settings")
+    p.set_defaults(func=_segment)
     return parser
 
 

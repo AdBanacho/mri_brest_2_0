@@ -38,7 +38,8 @@ def test_bash_suite(suite: Path) -> None:
 def test_launchers_are_thin_and_lf() -> None:
     launcher = (ROOT / "run_experiment.sh").read_bytes()
     assert len(launcher.splitlines()) <= 5
-    for path in [ROOT / "run_experiment.sh", ROOT / "run_experiment.slurm", ROOT / "experiment.conf",
+    for path in [ROOT / "run_experiment.sh", ROOT / "run_experiment.slurm", ROOT / "segment_mri_core.slurm",
+                 ROOT / "experiment.conf",
                  *ROOT.joinpath("configs").glob("*.conf"), *ROOT.joinpath("tests", "slurm").rglob("*")]:
         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
             assert b"\r\n" not in path.read_bytes(), f"CRLF line endings in {path}"

@@ -23,6 +23,11 @@ MASK_MANIFEST_OPTIONAL = {
     "class_codes": "", "source": "manual", "model_id": "", "model_version": "", "grid_source": "",
     "training_provenance": "unknown", "known_overlap": "", "fold": "",
 }
+# Read-time optional columns that writers emit only when they use them (keeps older manifests byte-identical,
+# and with them the mask_manifest_file fingerprint in train_id).
+MASK_MANIFEST_EXTRA = {"prompt_source": ""}
+# prompt_source values meaning the mask exists only where a Duke annotation box was given.
+BOX_PROMPT_SOURCES = ("annotation_box",)
 DEFAULT_CLASS_CODES = {0: "background", 1: "lesion"}
 NIFTI_MASK_SUFFIXES = (".nii", ".nii.gz")
 
@@ -51,7 +56,7 @@ def read_mask_manifest(path: str | os.PathLike) -> pd.DataFrame:
     missing = [c for c in MASK_MANIFEST_REQUIRED if c not in frame.columns]
     if missing:
         raise ValueError(f"{path}: mask manifest lacks columns {missing}")
-    for column, default in MASK_MANIFEST_OPTIONAL.items():
+    for column, default in {**MASK_MANIFEST_OPTIONAL, **MASK_MANIFEST_EXTRA}.items():
         if column not in frame.columns:
             frame[column] = default
         frame[column] = frame[column].map(lambda v: str(v).strip())
@@ -145,7 +150,7 @@ class LocalFileMaskProvider:
             class_codes=parse_class_codes(row["class_codes"]), source=row["source"],
             model_id=row["model_id"], model_version=row["model_version"], fingerprint=_file_sha256(path),
             grid_source=row["grid_source"] or row[SERIES_ID], training_provenance=provenance,
-            known_overlap=row["known_overlap"])
+            known_overlap=row["known_overlap"], prompt_source=row["prompt_source"])
 
     def describe(self) -> dict[str, Any]:
         frame = self.frame
@@ -157,6 +162,10 @@ class LocalFileMaskProvider:
                                "carry an unquantified leakage risk")
         if (frame["class_codes"] == "").any():
             limitations.append("some masks declare no class_codes; default {0: background, 1: lesion} assumed")
+        box_prompted = int(frame["prompt_source"].isin(BOX_PROMPT_SOURCES).sum())
+        if box_prompted:
+            limitations.append(f"{box_prompted} masks were produced by a segmenter prompted with Duke annotation boxes: "
+                               "a box is needed for every study at inference (research setting, as box_mode)")
         return {
             "provider": self.name, "manifest": str(self.manifest_path),
             "manifest_fingerprint": _file_sha256(str(self.manifest_path)), "n_masks": int(len(frame)),
@@ -165,6 +174,8 @@ class LocalFileMaskProvider:
             "training_provenance": dict(Counter(frame["training_provenance"])),
             "known_overlap": sorted(set(frame["known_overlap"]) - {""}),
             "folds": sorted(set(frame["fold"]) - {""}), "slice_axis": self.slice_axis,
+            "prompt_sources": dict(Counter(frame["prompt_source"])),
+            "requires_box_at_inference": bool(box_prompted),
             "unknown_provenance": bool(unknown), "limitations": limitations,
         }
 
@@ -180,4 +191,4 @@ def mask_manifest_frame(rows: list[Mapping[str, Any]]) -> pd.DataFrame:
 
 
 __all__ = ["LocalFileMaskProvider", "read_mask_manifest", "parse_class_codes", "mask_manifest_frame",
-           "DEFAULT_CLASS_CODES"]
+           "DEFAULT_CLASS_CODES", "BOX_PROMPT_SOURCES"]

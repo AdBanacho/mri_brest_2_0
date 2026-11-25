@@ -161,6 +161,13 @@ volume. Providers (`contracts.MaskProvider`):
 * Manual masks, predicted masks and 3D annotation boxes are separate sources:
   `mask_kind` must match the record `source` (`synthetic` accepted), boxes never
   enter the mask path.
+* Optional manifest column `prompt_source` (read-time default `""`, written only by tools that use it,
+  so older manifests and their fingerprints are unchanged). `annotation_box` marks masks from a
+  segmenter prompted with the Duke boxes (`prepare-data segment-mri-core`,
+  `docs/segmentation-mri-core.md`). Such masks exist only where a box exists. `MaskRecord.prompt_source`
+  is copied into `mask_audit*.csv`, `describe()` reports `prompt_sources` and
+  `requires_box_at_inference` plus a limitation, and `image_branch.json` sets
+  `mask.requires_box_at_inference` when the branch uses masks.
 
 Modes: `none`, `roi_crop` (bbox of `mask_roi_classes` ± `roi_margin` × extent per
 side, joint crop then joint resize), `mask_channel` (binary ROI appended), and
