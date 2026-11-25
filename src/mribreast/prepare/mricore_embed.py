@@ -275,12 +275,19 @@ def study_embedding(volume: np.ndarray, box, *, encoder, layer: str, pool: str, 
 
 
 # ----------------------------------------------------------------------------- job
-def cohort_studies(clinical_features_file: str, metadata_file: str, profile: str = "duke_legacy_3d") -> pd.DataFrame:
-    """Cohort studies (``patient_id, study_id, series_uids``) exactly as training builds them."""
+def cohort_studies(clinical_features_file: str, metadata_file: str, profile: str = "general",
+                   phase_count: int = 4) -> pd.DataFrame:
+    """Cohort studies (``patient_id, study_id, series_uids``) exactly as training builds them.
+
+    ``general`` orders the series by parsed phase (0 = pre, 1 = first post-contrast, ...), so ``--phase``
+    means the same acquisition in every study. ``duke_legacy_3d`` keeps metadata-file row order, which on the
+    real Duke digest mixes in non-DCE series (``ax t1``) for most studies; use it only to reproduce legacy runs.
+    """
     from mribreast.data.duke import DukeCohortSource
 
     cfg = {"clinical_features_file": clinical_features_file, "metadata_file": metadata_file,
-           "profile": profile, "feature_groups": ("clinical",)}
+           "profile": profile, "phase_count": phase_count,
+           "phase_order": "explicit" if profile == "general" else "metadata", "feature_groups": ("clinical",)}
     frame = DukeCohortSource(cfg).load(cfg).frame
     return frame[[PATIENT_ID, STUDY_ID, SERIES_UIDS]].reset_index(drop=True)
 
@@ -299,7 +306,7 @@ def run(args) -> int:
     if args.pool == "roi" and not args.annotation_boxes_file:
         raise SystemExit("--pool roi needs --annotation_boxes_file")
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    studies = cohort_studies(args.clinical_features_file, args.metadata_file, args.profile)
+    studies = cohort_studies(args.clinical_features_file, args.metadata_file, args.profile, args.phase_count)
     if args.limit:
         studies = studies.head(args.limit)
     # Same box eligibility as training (out_of_volume_box, ambiguous studies, geometry mismatch ...).
@@ -369,7 +376,9 @@ def add_parser(sub) -> None:
     p.add_argument("--output", required=True, help="embedding CSV (pipeline mricore_features_file)")
     p.add_argument("--mricore_repo", required=True, help="checkout of mazurowski-lab/mri_foundation")
     p.add_argument("--checkpoint", required=True, help="MRI-CORE ViT-B checkpoint (pretrained_weights/MRI_CORE_vitb.pth)")
-    p.add_argument("--profile", default="duke_legacy_3d", choices=("duke_legacy_3d", "general"))
+    p.add_argument("--profile", default="general", choices=("general", "duke_legacy_3d"),
+                   help="cohort profile; must match the training config (general = series ordered by parsed phase)")
+    p.add_argument("--phase_count", type=int, default=4, help="phases per study, as TRAIN[phase_count] (pre + 3 posts)")
     p.add_argument("--phase", type=int, default=1, help="index into the study's ordered series (0 = pre, 1 = post1)")
     p.add_argument("--subtract_phase", type=int, default=None, help="optional phase subtracted from --phase (e.g. 0)")
     p.add_argument("--pool", choices=POOLS, default="roi")

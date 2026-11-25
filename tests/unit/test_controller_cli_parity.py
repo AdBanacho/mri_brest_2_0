@@ -90,12 +90,13 @@ def test_every_task_argv_parses_and_round_trips(stage: str, config: Path) -> Non
             assert schema.parse_value(field, schema.format_value(field, resolved[key])) == resolved[key], key
 
 
-def test_legacy_profile_values() -> None:
+def test_shipped_duke_profile_values() -> None:
     argvs = local_dry_run("validate", ROOT / "experiment.conf")
     assert len(argvs) == 24
     _, emitted, tail = split_argv(argvs[-1])
     cfg = schema.resolve("validate", vars(schema.build_parser("validate").parse_args(tail)))
-    assert cfg["profile"] == "duke_legacy_3d"
+    # Legacy grid and hyper-parameters, but phases ordered by parsed DCE phase (docs/data-and-tabular.md 3.1)
+    assert (cfg["profile"], cfg["phase_order"], cfg["phase_count"]) == ("general", "explicit", 4)
     assert cfg["imaging_patient_id_column"] == "Patient ID"
     assert cfg["target_size"] == (256, 256, 64)
     assert cfg["feature_groups"] == ("clinical", "kinetic", "morphology", "heterogeneity")

@@ -83,7 +83,7 @@ check_invalid train 'requires PYTHON_VENV_ROOT' 'AUTO_INSTALL_PYTHON_PACKAGES=tr
 pass 'unknown keys, types, choices, ranges, grids, resources and runtime settings are rejected'
 
 # Combinations that are cheap to detect in Bash (Python re-checks all of them).
-check_invalid train 'duke_legacy_3d requires image_dim=3d' 'TRAIN[image_dim]=2d'
+check_invalid train 'duke_legacy_3d requires image_dim=3d' 'TRAIN[profile]=duke_legacy_3d' 'TRAIN[phase_order]=metadata' 'TRAIN[image_dim]=2d'
 check_invalid train 'mask_mode requires a mask_provider' 'TRAIN[profile]=general' 'TRAIN[mask_mode]=roi_crop'
 check_invalid train 'needs PATHS[mask_manifest_file]' 'TRAIN[profile]=general' 'TRAIN[mask_provider]=local_files'
 check_invalid train 'needs PATHS[density_file]' "TRAIN_GRID[feature_groups]='clinical,density'"

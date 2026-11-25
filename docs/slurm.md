@@ -162,6 +162,21 @@ python3 -m pip show numpy torch | awk '$1=="Name:"{n=tolower($2)} $1=="Version:"
 No `/net/...` path appears in package code; Helios locations appear only as
 comments in `experiment.conf`.
 
+## Running several configurations at once
+
+* Queued tasks run the live `src/` checkout: do not switch branches or edit code while
+  jobs are queued; use one `git worktree` per campaign.
+* Different settings never share a `train_id`, so configs may share `checkpoint_root`;
+  but do not submit the **same** row twice concurrently (both runs would train every
+  fold and the later one replaces the earlier result and log folder).
+* Chain stages: `--validate --dependency afterok:<train job id>`.
+* Keep `CLEAN_BEFORE_*=false` while another config writes to the same roots.
+* `--prepare` submits one task per training row that mostly warm the same cache;
+  training fills the cache itself (locked per entry), so a separate prepare is optional.
+* Home quota is 10 GB: the shipped Duke configs put environments, caches, checkpoints,
+  Lightning and Slurm logs on scratch (purged periodically; copy what you keep) and
+  only `validation_root` / `summary_root` in `runs/`.
+
 ## Cleanup
 
 `CLEAN_BEFORE_TRAIN=true` removes `checkpoint_root` and `logs_root`;
@@ -205,7 +220,9 @@ bash run_experiment.sh --summarize --config smoke.conf --dependency afterok:$V
 
 Inputs (paths in `PATHS`): `Clinical_and_Other_Features.xlsx` (Oncotype score,
 patient id), the NBIA digest `Duke-Breast-Cancer-MRI_v2_20220609-nbia-digest.xlsx`
-(series metadata; **row order defines the phase order** in `duke_legacy_3d`; not
+(series metadata; **row order defines the phase order** in `duke_legacy_3d`, which is
+wrong for most real Duke studies — `experiment.conf` therefore uses profile `general`,
+see docs/data-and-tabular.md 3.1; not
 tracked in the reference repository — download it from TCIA), `Imaging_Features.xlsx`
 (`Patient ID` column), `Annotation_Boxes.xlsx`, and `image_root` with one
 `<SeriesInstanceUID>.nii.gz` per series (produced by `python -m mribreast prepare`

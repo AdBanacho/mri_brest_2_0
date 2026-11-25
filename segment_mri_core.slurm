@@ -140,7 +140,7 @@ prepare_environment() { # -> PY
     PY=$env_dir/bin/python
     printf '%s\n' "$constraints" > "$env_dir/module-constraints.txt"
     # torchvision is resolved to the release that matches the module's torch (pinned by the constraint).
-    PIP_CONFIG_FILE=/dev/null PIP_USER=false PIP_DISABLE_PIP_VERSION_CHECK=1 "$PY" -m pip install \
+    PIP_CONFIG_FILE=/dev/null PIP_USER=false PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 "$PY" -m pip install \
       --constraint "$env_dir/module-constraints.txt" "${PYTHON_PACKAGES[@]}" "${SEGMENT_PACKAGES[@]}" ||
       fail 'Dependency installation failed. If no torchvision wheel matches the module torch, check `module spider torchvision` and add that module to MODULES'
     "$PY" -m pip check || fail 'pip check failed in the segmentation environment'

@@ -577,7 +577,7 @@ prepare_python_environment() {
     "$base_python" -m venv --system-site-packages --clear "$env_dir" || fail "Cannot create venv $env_dir"
     env_python=$(venv_python "$env_dir") || fail "venv has no interpreter: $env_dir"
     printf '%s\n' "$constraints" > "$env_dir/module-constraints.txt"
-    PIP_CONFIG_FILE=/dev/null PIP_USER=false PIP_DISABLE_PIP_VERSION_CHECK=1 "$env_python" -m pip install \
+    PIP_CONFIG_FILE=/dev/null PIP_USER=false PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 "$env_python" -m pip install \
       --constraint "$env_dir/module-constraints.txt" "${PYTHON_PACKAGES[@]}" ||
       fail 'Dependency installation failed; module NumPy/PyTorch constraints were preserved'
     "$env_python" -m pip check || fail 'pip check failed in the new environment'

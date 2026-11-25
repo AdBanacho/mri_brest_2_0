@@ -246,8 +246,8 @@ python -m mribreast prepare-data segment-mri-core \
   --cohort_option profile=general --cohort_option phase_order=explicit \
   --annotation_boxes_file data/duke/Annotation_Boxes.xlsx --image_root /net/storage/pr3/plgrid/plggsiwomipipan/aBanacho_duke_oncotype/tciaNifti \
   --mri_foundation_repo ../mri_foundation --weights mri_core \
-  --output_dir runs/duke/segmentation/mri_core_zeroshot --device cuda --previews 20
-# then in experiment.conf: [mask_manifest_file]=runs/duke/segmentation/mri_core_zeroshot/mask_manifest.csv
+  --output_dir /net/scratch/hscra/plgrid/plgabanacho/mri_brest_2_0/segmentation/mri_core_zeroshot --device cuda --previews 20
+# then in experiment.conf: [mask_manifest_file]=/net/scratch/hscra/plgrid/plgabanacho/mri_brest_2_0/segmentation/mri_core_zeroshot/mask_manifest.csv
 #   TRAIN: [mask_provider]=local_files [mask_kind]=predicted [mask_provenance]=frozen_external
 ```
 

@@ -212,6 +212,43 @@ def assign_phase_indices(metadata: pd.DataFrame) -> pd.DataFrame:
         raise CohortError("phase_order=explicit needs 'Series Description' or 'Phase Index' in the metadata file "
                           "to interpret pre/post-contrast phases; neither is present")
     out["phase_index"] = pd.Series([parse_phase_index(d) for d in out["series_description"]], dtype="Int64")
+    return _infer_unlabelled_pre_contrast(out)
+
+
+_PHASE_PREFIX = re.compile(r"^ph(?:ase)?[\s_\-]*\d+\s*/\s*")
+_TRAILING_PASS = re.compile(r"[\s_\-]*(?:\d+\s*(?:st|nd|rd|th)\s*(?:pass|post|phase)|post(?:contrast)?[\s_\-]*\d+)$")
+
+
+def _normalise_description(description: Any) -> str:
+    return " ".join(str(description or "").lower().split())
+
+
+def _phase_base(description: Any) -> str:
+    """Description without its post-contrast phase token (``Ph2/ax 3d dyn`` -> ``ax 3d dyn``)."""
+    return _TRAILING_PASS.sub("", _PHASE_PREFIX.sub("", _normalise_description(description))).strip()
+
+
+def _infer_unlabelled_pre_contrast(metadata: pd.DataFrame) -> pd.DataFrame:
+    """Duke names the pre-contrast series like its post-contrast siblings minus the phase token
+    (``ax 3d dyn`` next to ``Ph1/ax 3d dyn``; ``ax dyn`` next to ``ax dyn 1st pass``).
+
+    In a study with parsed post-contrast phases but no phase 0, an unparsed series whose description
+    equals the phase-stripped description of one of those posts becomes phase 0. Several such
+    candidates are all marked and then excluded downstream as ``ambiguous_phase_index``.
+    """
+    if STUDY_ID not in metadata.columns:
+        return metadata
+    out = metadata.copy()
+    for _, group in out.groupby(STUDY_ID, sort=False):
+        phases = group["phase_index"]
+        if (phases == 0).any() or not (phases > 0).any():
+            continue
+        bases = {_phase_base(d) for d, p in zip(group["series_description"], phases) if pd.notna(p) and p > 0}
+        bases.discard("")
+        candidates = [i for i, d, p in zip(group.index, group["series_description"], phases)
+                      if pd.isna(p) and _normalise_description(d) in bases]
+        if candidates:
+            out.loc[candidates, "phase_index"] = 0
     return out
 
 

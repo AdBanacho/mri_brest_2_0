@@ -78,7 +78,9 @@ Frozen encoder embeddings from the MRI-CORE foundation model
 (`~/mri_foundation`, ViT-B, adapters off), produced by the separate GPU job
 `python -m mribreast.prepare mricore-embed` (`run_mricore_embed.slurm`). Per
 cohort study it takes one DCE phase (`--phase 1` = first post-contrast by
-default, optional `--subtract_phase`), the axial slices inside the patient's
+default, optional `--subtract_phase`; the cohort is built with `--profile general
+--phase_count 4` like the shipped configs, so the index means the same acquisition
+in every study), the axial slices inside the patient's
 annotation box (thinned to `--max_slices`), clips each volume to its
 [0.5, 99.5] percentiles, resizes slices to 1024², applies ImageNet
 normalisation and average-pools the encoder map over the box (`roi`) and/or the
@@ -132,10 +134,22 @@ Exact port of `get_oncotype_score_for_series_as_studyId_and_label_df`
 (pre, post1, …). Legacy never checks this; the note is written into cohort notes.
 Verified exact parity with legacy on synthetic data (`test_data_legacy_parity.py`).
 
+**On the real Duke digest this assumption is false** (checked 2026-11-25): in 220 of the 261
+scored studies the first five rows mix in the non-DCE `ax t1` series and are not in
+pre→post order (e.g. `3rd pass, 1st pass, ax t1, pre, 2nd pass`), so image channels differ
+between patients and only 37/261 studies get an eligible annotation box. Use this profile
+only to reproduce legacy numbers; the shipped Duke configs use `general` (3.2).
+
 ### 3.2 Profile `general`
 Phase index per series = `Phase Index` column, else parsed from `Series Description`
 (`parse_phase_index`: `pre` → 0, `Nth pass` / `postN` / `phN` → N, else not a DCE
-phase). Missing both columns → `CohortError` (cannot interpret pre/post). Metadata
+phase). Duke names the pre-contrast series like its post-contrast siblings minus the
+phase token (`ax 3d dyn` next to `Ph1/ax 3d dyn`, `ax dyn` next to `ax dyn 1st pass`):
+in a study with parsed posts but no phase 0, an unparsed series whose description equals a
+post's description without its phase token becomes phase 0 (several candidates →
+`ambiguous_phase_index`). On the real digest this gives 257/261 studies at
+`phase_count=4` (pre + 3 posts; 111 at 5, most studies have three posts), all with one
+geometry across phases and an eligible annotation box. Missing both columns → `CohortError` (cannot interpret pre/post). Metadata
 verification: missing ids raise; a series UID in several studies raises; per study
 (excluded with reason): `study_spans_patients`, `duplicate_series_uid`,
 `phase_unparseable`, `ambiguous_phase_index`, `missing_pre_contrast`,

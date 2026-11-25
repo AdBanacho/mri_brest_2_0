@@ -88,6 +88,24 @@ def test_general_profile_orders_phases_and_reports_missing_pre_post():
     assert studies_m.empty and dict(zip(audit_m[STUDY_ID], audit_m["reason"]))["S1"] == "non_contiguous_or_unordered_phases"
 
 
+def test_general_infers_unlabelled_pre_contrast_from_sibling_names():
+    rows = [(i, "P1", "S1", f"u{i}", d) for i, d in enumerate(
+        ["Ph1/ax 3d dyn", "ax t1", "Ph2/ax 3d dyn", "ax 3d dyn", "Ph3/ax 3d dyn", "Ph4/ax 3d dyn"])]
+    rows += [(10 + i, "P2", "S2", f"v{i}", d) for i, d in enumerate(
+        ["ax dyn 3rd pass", "ax dyn", "ax dyn 1st pass", "ax dyn 2nd pass", "ax dyn 4th pass"])]
+    rows += [(20 + i, "P3", "S3", f"w{i}", d) for i, d in enumerate(                  # two candidates -> ambiguous
+        ["Ph1/ax dynamic", "ax dynamic", "Ph2/ax dynamic", "AX  Dynamic", "Ph3/ax dynamic", "Ph4/ax dynamic"])]
+    rows += [(30 + i, "P4", "S4", f"x{i}", d) for i, d in enumerate(                  # unrelated name stays non-DCE
+        ["Ph1/ax 3d dyn", "ax t1", "Ph2/ax 3d dyn", "Ph3/ax 3d dyn", "Ph4/ax 3d dyn"])]
+    clinical = _clinical({p: 20.0 for p in ("P1", "P2", "P3", "P4")})
+    studies, audit = select_studies_general(_metadata(rows), clinical, label_definition("oncotype_binary_18"), 5)
+    assert dict(zip(studies[STUDY_ID], studies[SERIES_UIDS])) == {
+        "S1": ("u3", "u0", "u2", "u4", "u5"), "S2": ("v1", "v2", "v3", "v0", "v4")}
+    reasons = dict(zip(audit[STUDY_ID], audit["reason"]))
+    assert reasons["S3"] == "ambiguous_phase_index"
+    assert reasons["S4"] == "missing_pre_contrast"
+
+
 def test_general_requires_phase_information():
     meta = _metadata([(0, "P1", "S1", "u0", "pre")]).drop(columns="series_description")
     with pytest.raises(CohortError, match="Series Description"):
